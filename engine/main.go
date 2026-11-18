@@ -62,6 +62,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.control(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/_fetch") {
+		s.fetch(w, r)
+		return
+	}
 	eco, rel := s.matchEco(r.URL.Path)
 	if eco == nil {
 		http.Error(w, "proxyhub: no ecosystem for "+r.URL.Path, http.StatusNotFound)
@@ -97,6 +101,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil || status >= 500 {
 			continue // 换下一个上游
 		}
+		// 改写索引里的包文件链接,让它们也经过本地缓存
+		if r.Method == http.MethodGet && status == 200 {
+			selfBase := "http://127.0.0.1:" + itoa(s.cfg.Port)
+			if eco.Name == "pip" && strings.Contains(ct, "html") {
+				body = rewritePip(body, selfBase, target)
+			} else if eco.Name == "npm" && strings.Contains(ct, "json") {
+				body = rewriteNpm(body, selfBase, target)
+			}
+		}
 		if ct != "" {
 			w.Header().Set("Content-Type", ct)
 		}
@@ -121,7 +134,8 @@ func (s *Server) forward(r *http.Request, target string) (int, string, []byte, e
 		return 0, "", nil, err
 	}
 	for k, vs := range r.Header {
-		if k == "Host" || k == "Connection" {
+		// 剥掉 Accept-Encoding:让 Go 自动解压,引擎始终处理明文(便于改写与正确透传)
+		if k == "Host" || k == "Connection" || k == "Accept-Encoding" {
 			continue
 		}
 		for _, v := range vs {
@@ -174,6 +188,48 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unknown control endpoint", http.StatusNotFound)
 	}
+}
+
+// fetch 处理 /_fetch?u=<上游绝对URL>:带缓存地取回任意上游资源(供改写后的包文件链接使用)。
+func (s *Server) fetch(w http.ResponseWriter, r *http.Request) {
+	u := r.URL.Query().Get("u")
+	if u == "" {
+		http.Error(w, "missing u", http.StatusBadRequest)
+		return
+	}
+	if body, ct, ok := s.cache.get("_fetch", u); ok {
+		if ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.Header().Set("X-ProxyHub-Cache", "HIT")
+		w.Write(body)
+		s.record(RouteEvent{time.Now().Format("15:04:05"), "_fetch", shortURL(u), "cache", true, 200, 0})
+		return
+	}
+	start := time.Now()
+	status, ct, body, err := s.forward(r, u)
+	lat := time.Since(start).Milliseconds()
+	if err != nil {
+		http.Error(w, "fetch failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.Header().Set("X-ProxyHub-Cache", "MISS")
+	w.WriteHeader(status)
+	w.Write(body)
+	if status == 200 && len(body) <= maxCacheObject {
+		s.cache.put("_fetch", u, ct, body)
+	}
+	s.record(RouteEvent{time.Now().Format("15:04:05"), "_fetch", shortURL(u), "upstream", false, status, lat})
+}
+
+func shortURL(u string) string {
+	if i := strings.LastIndex(u, "/"); i >= 0 && i < len(u)-1 {
+		return u[i+1:]
+	}
+	return u
 }
 
 func main() {
