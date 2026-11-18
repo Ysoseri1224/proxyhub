@@ -32,6 +32,7 @@ pub fn run() {
             routing::routing_import_clash,
             routing::list_apps,
             routing::import_bookmarks,
+            routing::clash_groups,
             routing::launch_clash,
             routing::exit_ip_check,
             // 模块三 · 凭据与账号
@@ -47,6 +48,7 @@ pub fn run() {
             cloudflare::cf_email_rules,
             cloudflare::cf_email_destinations,
             cloudflare::cf_email_add,
+            cloudflare::cf_email_delete,
             cloudflare::cf_open_console,
         ])
         .run(tauri::generate_context!())

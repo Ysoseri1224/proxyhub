@@ -78,12 +78,25 @@ pub fn engine_running() -> bool {
 
 #[tauri::command]
 pub fn engine_start(app: tauri::AppHandle) -> Result<String, String> {
+    if engine_running() {
+        return Ok("引擎已在运行".into());
+    }
     for bin in engine_candidates(&app) {
         if std::path::Path::new(&bin).exists() {
             std::process::Command::new(&bin)
                 .spawn()
                 .map_err(|e| e.to_string())?;
-            return Ok("引擎已启动".into());
+            // 确认真的在端口上监听,避免端口冲突导致"假启动"
+            for _ in 0..12 {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                if engine_running() {
+                    return Ok("引擎已启动".into());
+                }
+            }
+            return Err(format!(
+                "引擎进程已拉起但未在端口 {} 监听(可能端口被占用或引擎异常退出)",
+                port()
+            ));
         }
     }
     Err("未找到引擎二进制(resources/proxyhub-engine 或工作区 engine/proxyhub)".into())

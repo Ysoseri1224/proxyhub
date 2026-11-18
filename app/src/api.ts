@@ -21,6 +21,7 @@ export const routingImportClash = () => invoke<string>("routing_import_clash");
 export type AppItem = { name: string; path: string };
 export const listApps = () => invoke<AppItem[]>("list_apps");
 export const importBookmarks = () => invoke<string[]>("import_bookmarks");
+export const clashGroups = () => invoke<string[]>("clash_groups");
 export const launchClash = () => invoke<string>("launch_clash");
 export const exitIpCheck = () => invoke<string>("exit_ip_check");
 
@@ -31,7 +32,8 @@ export const credGet = (name: string) => invoke<string>("cred_get", { name });
 export const credSet = (name: string, value: string, category: string, note: string) =>
   invoke<void>("cred_set", { name, value, category, note });
 export const credDelete = (name: string) => invoke<void>("cred_delete", { name });
-export const ghAccounts = () => invoke<string>("gh_accounts");
+export type GhAccount = { user: string; active: boolean };
+export const ghAccounts = () => invoke<GhAccount[]>("gh_accounts");
 export const ghSwitch = (user: string) => invoke<string>("gh_switch", { user });
 
 // 模块三.6 · Cloudflare / 邮箱
@@ -42,4 +44,6 @@ export const cfEmailDestinations = (accountId: string) =>
   invoke<string>("cf_email_destinations", { accountId });
 export const cfEmailAdd = (zoneId: string, alias: string, dest: string) =>
   invoke<string>("cf_email_add", { zoneId, alias, dest });
+export const cfEmailDelete = (zoneId: string, ruleId: string) =>
+  invoke<string>("cf_email_delete", { zoneId, ruleId });
 export const cfOpenConsole = (section: string) => invoke<string>("cf_open_console", { section });

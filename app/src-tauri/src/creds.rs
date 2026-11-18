@@ -83,21 +83,45 @@ pub fn cred_delete(name: String) -> Result<(), String> {
     save_index(&idx)
 }
 
-/// gh 多账号状态(原样返回 gh auth status 文本)。
+#[derive(Serialize)]
+pub struct GhAccount {
+    pub user: String,
+    pub active: bool,
+}
+
+/// gh 多账号:解析出每个账号及谁是当前活跃账号(终端登录态)。
 #[tauri::command]
-pub fn gh_accounts() -> Result<String, String> {
+pub fn gh_accounts() -> Result<Vec<GhAccount>, String> {
     let out = std::process::Command::new("gh")
         .args(["auth", "status"])
         .output()
         .map_err(|e| e.to_string())?;
-    // gh auth status 可能走 stderr
-    let mut s = String::from_utf8_lossy(&out.stdout).to_string();
-    s.push_str(&String::from_utf8_lossy(&out.stderr));
-    Ok(s)
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+
+    let mut accounts: Vec<GhAccount> = vec![];
+    for line in text.lines() {
+        if let Some(idx) = line.find("account ") {
+            let rest = &line[idx + "account ".len()..];
+            let user = rest.split_whitespace().next().unwrap_or("").to_string();
+            if !user.is_empty() {
+                accounts.push(GhAccount { user, active: false });
+            }
+        }
+        if line.contains("Active account: true") {
+            if let Some(last) = accounts.last_mut() {
+                last.active = true;
+            }
+        }
+    }
+    Ok(accounts)
 }
 
-/// 切换 gh 活动账号(终端登录态即时切换)。
+/// 切换 gh 活动账号(终端登录态即时切换),并同步 git 全局身份。
 #[tauri::command]
 pub fn gh_switch(user: String) -> Result<String, String> {
-    sh("gh", &["auth", "switch", "-u", &user])
+    sh("gh", &["auth", "switch", "-u", &user])?;
+    // 同步 git 提交身份,避免切了 gh 却还用旧 user.name
+    let _ = sh("git", &["config", "--global", "user.name", &user]);
+    Ok(format!("已切换到 {user}"))
 }

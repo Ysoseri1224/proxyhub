@@ -89,6 +89,16 @@ pub fn cf_email_add(zone_id: String, alias: String, dest: String) -> Result<Stri
     )
 }
 
+/// 删除一条邮箱路由规则。
+#[tauri::command]
+pub fn cf_email_delete(zone_id: String, rule_id: String) -> Result<String, String> {
+    cf_api(
+        "DELETE",
+        &format!("/zones/{zone_id}/email/routing/rules/{rule_id}"),
+        None,
+    )
+}
+
 /// 打开 Cloudflare 控制台的某个区域(省去每次手动登录找页面)。
 #[tauri::command]
 pub fn cf_open_console(section: String) -> Result<String, String> {

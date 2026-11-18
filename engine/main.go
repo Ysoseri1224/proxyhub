@@ -43,6 +43,13 @@ func (s *Server) record(ev RouteEvent) {
 	}
 }
 
+// ordered 在读锁保护下返回按健康排序的上游(健康字段由后台 goroutine 并发写)。
+func (s *Server) ordered(e *Ecosystem) []*Upstream {
+	s.cfg.mu.RLock()
+	defer s.cfg.mu.RUnlock()
+	return e.ordered()
+}
+
 // matchEco 最长前缀匹配生态。
 func (s *Server) matchEco(path string) (*Ecosystem, string) {
 	var best *Ecosystem
@@ -71,26 +78,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "proxyhub: no ecosystem for "+r.URL.Path, http.StatusNotFound)
 		return
 	}
-	cacheKey := rel
-	if r.URL.RawQuery != "" {
-		cacheKey += "?" + r.URL.RawQuery
-	}
+	// 注意:索引/元数据(这里的生态响应)始终回源取最新,不做磁盘缓存,
+	// 以免缓存住旧索引导致"看不到新版本"。只有不可变的包文件(经 /_fetch)才缓存。
 
-	// 1) GET 先查缓存
-	if r.Method == http.MethodGet {
-		if body, ct, ok := s.cache.get(eco.Name, cacheKey); ok {
-			if ct != "" {
-				w.Header().Set("Content-Type", ct)
-			}
-			w.Header().Set("X-ProxyHub-Cache", "HIT")
-			w.Write(body)
-			s.record(RouteEvent{time.Now().Format("15:04:05"), eco.Name, rel, "cache", true, 200, 0})
-			return
-		}
-	}
-
-	// 2) 按健康择优,逐个上游尝试,失败转移
-	for _, up := range eco.ordered() {
+	// 按健康择优,逐个上游尝试,失败转移
+	for _, up := range s.ordered(eco) {
 		target := strings.TrimRight(up.Base, "/") + "/" + rel
 		if r.URL.RawQuery != "" {
 			target += "?" + r.URL.RawQuery
@@ -117,9 +109,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-ProxyHub-Cache", "MISS")
 		w.WriteHeader(status)
 		w.Write(body)
-		if r.Method == http.MethodGet && status == 200 && len(body) <= maxCacheObject {
-			s.cache.put(eco.Name, cacheKey, ct, body)
-		}
 		s.record(RouteEvent{time.Now().Format("15:04:05"), eco.Name, rel, up.Name, false, status, lat})
 		return
 	}
@@ -167,6 +156,7 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		}
 		out := map[string]any{"port": s.cfg.Port, "cacheBytes": s.cache.size(), "cacheMaxMB": s.cfg.CacheMaxMB, "ecosystems": []any{}}
 		var ecos []any
+		s.cfg.mu.RLock() // 与健康检查 goroutine 的写互斥
 		for _, e := range s.cfg.Ecosystems {
 			var ups []upst
 			for _, u := range e.Upstreams {
@@ -174,6 +164,7 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 			}
 			ecos = append(ecos, map[string]any{"name": e.Name, "prefix": e.Prefix, "upstreams": ups})
 		}
+		s.cfg.mu.RUnlock()
 		out["ecosystems"] = ecos
 		json.NewEncoder(w).Encode(out)
 	case "/_ph/diagnose":

@@ -1,5 +1,12 @@
-import { useState } from "react";
-import { cfZones, cfEmailRules, cfEmailAdd, cfOpenConsole } from "../api";
+import { useEffect, useState } from "react";
+import {
+  cfZones,
+  cfEmailRules,
+  cfEmailAdd,
+  cfEmailDelete,
+  cfEmailDestinations,
+  cfOpenConsole,
+} from "../api";
 import { getErrorMessage, tryParse } from "../util";
 
 interface Zone {
@@ -7,19 +14,25 @@ interface Zone {
   name: string;
   account?: { id: string; name: string };
 }
-interface ZonesResp {
+interface CfError {
+  code: number;
+  message: string;
+}
+interface CfResp<T> {
   success: boolean;
-  result?: Zone[];
+  result?: T;
+  errors?: CfError[];
 }
 interface EmailRule {
+  tag?: string;
   name?: string;
   enabled?: boolean;
   matchers?: { type: string; field?: string; value?: string }[];
   actions?: { type: string; value?: string[] }[];
 }
-interface RulesResp {
-  success: boolean;
-  result?: EmailRule[];
+interface Destination {
+  email: string;
+  verified?: string | null;
 }
 
 const CONSOLES = [
@@ -30,42 +43,70 @@ const CONSOLES = [
 ];
 
 export function Cloudflare() {
-  const [zones, setZones] = useState<Zone[]>([]);
-  const [zoneId, setZoneId] = useState("");
+  const [zone, setZone] = useState<Zone | null>(null);
   const [rules, setRules] = useState<EmailRule[]>([]);
+  const [dests, setDests] = useState<Destination[]>([]);
   const [alias, setAlias] = useState("");
   const [dest, setDest] = useState("");
+  const [err, setErr] = useState("");
   const [toast, setToast] = useState("");
 
-  async function loadZones(): Promise<void> {
+  async function loadAll(): Promise<void> {
+    setErr("");
     try {
-      const z = tryParse<ZonesResp>(await cfZones());
+      const z = tryParse<CfResp<Zone[]>>(await cfZones());
       if (!z?.success) {
-        setToast("加载失败:请在「凭据账号」里确认 CLOUDFLARE_API_TOKEN 有效");
+        setErr(`无法读取域名:${z?.errors?.map((e) => e.message).join("; ") || "token 无效或缺权限"}`);
         return;
       }
-      setZones(z.result ?? []);
-      setToast(`拉到 ${z.result?.length ?? 0} 个域名`);
+      const target = z.result?.find((x) => x.name === "ysoseri.us") ?? z.result?.[0] ?? null;
+      setZone(target);
+      if (!target) return;
+      // 已验证的转发目标
+      if (target.account?.id) {
+        const d = tryParse<CfResp<Destination[]>>(await cfEmailDestinations(target.account.id));
+        if (d?.success) {
+          setDests(d.result ?? []);
+          const firstVerified = (d.result ?? []).find((x) => x.verified)?.email;
+          if (firstVerified) setDest(firstVerified);
+        }
+      }
+      // 转发规则
+      const r = tryParse<CfResp<EmailRule[]>>(await cfEmailRules(target.id));
+      if (!r?.success) {
+        setErr(
+          `读取转发规则失败:${r?.errors?.map((e) => `${e.code} ${e.message}`).join("; ")}。` +
+            `当前 token 很可能缺少「Email Routing Rules」权限——请换一个带该权限的 token。`
+        );
+        setRules([]);
+        return;
+      }
+      setRules(r.result ?? []);
     } catch (error: unknown) {
-      setToast(getErrorMessage(error));
+      setErr(getErrorMessage(error));
     }
   }
-  async function loadRules(id: string): Promise<void> {
-    setZoneId(id);
-    try {
-      const r = tryParse<RulesResp>(await cfEmailRules(id));
-      setRules(r?.result ?? []);
-    } catch (error: unknown) {
-      setToast(getErrorMessage(error));
-    }
-  }
+  useEffect(() => {
+    void loadAll();
+  }, []);
+
   async function addAlias(): Promise<void> {
-    if (!zoneId || !alias.trim() || !dest.trim()) return;
+    if (!zone || !alias.trim() || !dest.trim()) return;
     try {
-      const r = tryParse<{ success: boolean }>(await cfEmailAdd(zoneId, alias.trim(), dest.trim()));
-      setToast(r?.success ? "别名已创建" : "创建失败(目标地址需先在 CF 验证)");
+      const r = tryParse<CfResp<EmailRule>>(await cfEmailAdd(zone.id, alias.trim(), dest.trim()));
+      setToast(r?.success ? `已创建 ${alias} → ${dest}` : `失败:${r?.errors?.map((e) => e.message).join("; ")}`);
       setAlias("");
-      await loadRules(zoneId);
+      await loadAll();
+    } catch (error: unknown) {
+      setToast(getErrorMessage(error));
+    }
+  }
+  async function removeRule(tag?: string): Promise<void> {
+    if (!zone || !tag) return;
+    try {
+      await cfEmailDelete(zone.id, tag);
+      setToast("已删除规则");
+      await loadAll();
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
@@ -73,59 +114,64 @@ export function Cloudflare() {
 
   return (
     <div>
-      <h1 className="page-title">Cloudflare</h1>
-      <p className="page-sub">控制台快捷入口 + 域名邮箱(Email Routing)管理 · token 取自凭据库</p>
-
-      <div className="card">
-        <div className="row">
-          <h3 style={{ margin: 0 }}>控制台快捷入口</h3>
-          <span className="spacer" />
-          {CONSOLES.map((c) => (
-            <button key={c.id} onClick={() => void cfOpenConsole(c.id).then(setToast)}>{c.label}</button>
-          ))}
+      <div className="row">
+        <div>
+          <h1 className="page-title">Cloudflare</h1>
+          <p className="page-sub" style={{ margin: 0 }}>
+            {zone ? `域名 ${zone.name} · 邮箱转发管理` : "控制台 + 域名邮箱(Email Routing)"}
+          </p>
         </div>
+        <span className="spacer" />
+        {CONSOLES.map((c) => (
+          <button key={c.id} onClick={() => void cfOpenConsole(c.id).then(setToast)}>{c.label}</button>
+        ))}
       </div>
 
-      <div className="card">
-        <div className="row">
-          <h3 style={{ margin: 0 }}>域名</h3>
-          <span className="spacer" />
-          <button className="primary" onClick={() => void loadZones()}>校验 token 并加载</button>
-        </div>
-        <div className="row" style={{ marginTop: 10 }}>
-          {zones.map((z) => (
-            <button key={z.id} className={zoneId === z.id ? "primary" : ""} onClick={() => void loadRules(z.id)}>
-              {z.name}
-            </button>
-          ))}
-          {zones.length === 0 && <span className="toast">点右上加载;需先在"凭据账号"存入 CLOUDFLARE_API_TOKEN。</span>}
-        </div>
-      </div>
-
-      {zoneId && (
-        <div className="card">
-          <h3>邮箱路由规则 — {zones.find((z) => z.id === zoneId)?.name}</h3>
-          <div className="row">
-            <input placeholder="别名,如 leif@ysoseri.us" value={alias} onChange={(e) => setAlias(e.target.value)} style={{ width: 230 }} />
-            <span>→</span>
-            <input placeholder="转发到(已验证地址)" value={dest} onChange={(e) => setDest(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
-            <button className="primary" onClick={() => void addAlias()}>新增转发</button>
-          </div>
-          <table style={{ marginTop: 12 }}>
-            <thead><tr><th>别名 / 匹配</th><th>转发到</th><th>状态</th></tr></thead>
-            <tbody>
-              {rules.map((r, i) => (
-                <tr key={i}>
-                  <td className="mono">{r.matchers?.map((m) => m.value ?? m.type).join(", ") || "(catch-all)"}</td>
-                  <td className="mono">{r.actions?.flatMap((a) => a.value ?? []).join(", ")}</td>
-                  <td><span className={`pill ${r.enabled ? "ok" : "dim"}`}>{r.enabled ? "启用" : "停用"}</span></td>
-                </tr>
-              ))}
-              {rules.length === 0 && <tr><td colSpan={3} className="toast">无规则。</td></tr>}
-            </tbody>
-          </table>
+      {err && (
+        <div className="card" style={{ borderColor: "var(--err)", marginTop: 16 }}>
+          <strong style={{ color: "var(--err)" }}>⚠ {err}</strong>
         </div>
       )}
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h3>邮箱转发规则</h3>
+        <div className="row" style={{ marginBottom: 10 }}>
+          <input placeholder="别名,如 gh@ysoseri.us" value={alias}
+            onChange={(e) => setAlias(e.target.value)} style={{ width: 230 }} />
+          <span style={{ color: "var(--text-dim)" }}>→ 转发到</span>
+          <select value={dest} onChange={(e) => setDest(e.target.value)}>
+            {dests.filter((d) => d.verified).map((d) => <option key={d.email} value={d.email}>{d.email}</option>)}
+            {dests.filter((d) => d.verified).length === 0 && <option value="">(无已验证目标)</option>}
+          </select>
+          <button className="primary" onClick={() => void addAlias()}>新增转发</button>
+        </div>
+        <table>
+          <thead><tr><th>别名 / 匹配</th><th>转发到</th><th>状态</th><th></th></tr></thead>
+          <tbody>
+            {rules.map((r) => (
+              <tr key={r.tag}>
+                <td className="mono">{r.matchers?.map((m) => m.value ?? m.type).join(", ") || "(catch-all)"}</td>
+                <td className="mono">{r.actions?.flatMap((a) => a.value ?? []).join(", ")}</td>
+                <td><span className={`pill ${r.enabled ? "ok" : "dim"}`}>{r.enabled ? "启用" : "停用"}</span></td>
+                <td><button className="danger" onClick={() => void removeRule(r.tag)}>删</button></td>
+              </tr>
+            ))}
+            {rules.length === 0 && <tr><td colSpan={4} className="toast">无规则(或 token 无权限读取,见上方提示)。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <h3>已验证的转发目标</h3>
+        <div className="row">
+          {dests.map((d) => (
+            <span key={d.email} className={`pill ${d.verified ? "ok" : "err"}`}>
+              {d.email} {d.verified ? "✓" : "未验证"}
+            </span>
+          ))}
+          {dests.length === 0 && <span className="toast">未读到目标地址。</span>}
+        </div>
+      </div>
 
       <div className="toast">{toast}</div>
     </div>

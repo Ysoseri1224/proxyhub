@@ -103,7 +103,16 @@ pub fn routing_save(json: String) -> Result<String, String> {
     write_file(&routing_json(), &json)?;
     // 3) 生成并写 Merge.yaml
     write_file(&merge_yaml(), &gen_merge(&model))?;
-    Ok(format!("已写回,备份: {backed}"))
+    // 4) Clash Verge 正在运行时会管理/可能覆盖该文件,明确提示而非静默
+    let clash_running = sh("pgrep", &["-x", "clash-verge"])
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let warn = if clash_running {
+        " ⚠ Clash Verge 正在运行:请在其中「重新激活订阅」以加载;若规则被覆盖,关闭 Clash Verge 后再保存。"
+    } else {
+        ""
+    };
+    Ok(format!("已写回({} 条规则),备份: {}{}", model.rules.len(), backed, warn))
 }
 
 #[tauri::command]
@@ -247,6 +256,59 @@ fn collect_urls(v: &serde_json::Value, out: &mut std::collections::BTreeSet<Stri
             }
         }
         _ => {}
+    }
+}
+
+/// 读取当前订阅里的真实策略组名(作为"去向"选项),外加 DIRECT/REJECT 与本工具自建组。
+#[tauri::command]
+pub fn clash_groups() -> Result<Vec<String>, String> {
+    let dir = format!(
+        "{}/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/profiles",
+        home()
+    );
+    let mut groups: Vec<String> = vec![
+        "🌍 国外流量".into(),
+        "⚡ 自动选择".into(),
+        "DIRECT".into(),
+        "REJECT".into(),
+    ];
+    if let Ok(rd) = fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if !n.ends_with(".yaml") || n == "Merge.yaml" {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(e.path()) {
+                parse_group_names(&content, &mut groups);
+            }
+        }
+    }
+    Ok(groups)
+}
+
+fn parse_group_names(content: &str, out: &mut Vec<String>) {
+    let mut in_groups = false;
+    for line in content.lines() {
+        if line.starts_with("proxy-groups:") {
+            in_groups = true;
+            continue;
+        }
+        if in_groups {
+            // 遇到下一个顶层键则结束
+            if !line.starts_with(' ') && !line.starts_with('-') && !line.trim().is_empty() {
+                break;
+            }
+            let t = line.trim_start();
+            let name = t
+                .strip_prefix("- name:")
+                .or_else(|| t.strip_prefix("name:"))
+                .map(|r| r.trim().trim_matches('"').trim_matches('\'').to_string());
+            if let Some(name) = name {
+                if !name.is_empty() && !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
     }
 }
 

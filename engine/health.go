@@ -20,7 +20,10 @@ func startHealthChecks(cfg *Config, interval time.Duration) {
 				wg.Add(1)
 				go func(u *Upstream) { // 并行探测,不互相阻塞
 					defer wg.Done()
-					u.Up, u.Latency = probe(u.Base)
+					ok, lat := probe(u.Base) // 慢操作在锁外
+					cfg.mu.Lock()
+					u.Up, u.Latency = ok, lat // 写在锁内,与 ServeHTTP 的读互斥
+					cfg.mu.Unlock()
 				}(up)
 			}
 		}

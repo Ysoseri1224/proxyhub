@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   routingGet,
   routingSave,
@@ -7,6 +7,7 @@ import {
   routingImportClash,
   listApps,
   importBookmarks,
+  clashGroups,
   launchClash,
   exitIpCheck,
   type Rule,
@@ -15,15 +16,19 @@ import {
 import { getErrorMessage, tryParse } from "../util";
 
 type Category = "app" | "domain" | "geosite" | "ipcidr" | "geoip" | "port";
-const CATS: { id: Category; label: string }[] = [
-  { id: "app", label: "应用 App" },
-  { id: "domain", label: "域名" },
-  { id: "geosite", label: "预置服务集" },
-  { id: "ipcidr", label: "IP/网段" },
-  { id: "geoip", label: "地区" },
-  { id: "port", label: "端口" },
+interface CatDef {
+  id: Category;
+  label: string;
+  hint: string;
+}
+const CATS: CatDef[] = [
+  { id: "app", label: "应用 App", hint: "按进程名,如 Google Chrome(需 Tun 模式)" },
+  { id: "domain", label: "域名", hint: "如 openai.com(可从书签导入)" },
+  { id: "geosite", label: "预置服务集", hint: "如 google / github / netflix" },
+  { id: "ipcidr", label: "IP / 网段", hint: "如 1.1.1.1/32" },
+  { id: "geoip", label: "地区", hint: "如 CN / US" },
+  { id: "port", label: "端口", hint: "如 443" },
 ];
-const TARGETS = ["🌍 国外流量", "⚡ 自动选择", "DIRECT"];
 
 interface IpInfo {
   query?: string;
@@ -35,41 +40,130 @@ interface IpInfo {
   hosting?: boolean;
 }
 
+interface SectionProps {
+  cat: CatDef;
+  items: { rule: Rule; index: number }[];
+  groups: string[];
+  apps: AppItem[];
+  domains: string[];
+  collapsed: boolean;
+  onToggle: () => void;
+  onAdd: (value: string, target: string) => void;
+  onRemove: (index: number) => void;
+}
+
+function CategorySection({ cat, items, groups, apps, domains, collapsed, onToggle, onAdd, onRemove }: SectionProps) {
+  const [value, setValue] = useState("");
+  const [target, setTarget] = useState(groups[0] ?? "DIRECT");
+  useEffect(() => {
+    if (!groups.includes(target)) setTarget(groups[0] ?? "DIRECT");
+  }, [groups]);
+
+  function submit(): void {
+    if (!value.trim()) return;
+    onAdd(value.trim(), target);
+    setValue("");
+  }
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <div
+        className="row"
+        style={{ padding: "12px 16px", cursor: "default", userSelect: "none" }}
+        onClick={onToggle}
+      >
+        <span style={{ width: 16, color: "var(--text-dim)" }}>{collapsed ? "▸" : "▾"}</span>
+        <strong>{cat.label}</strong>
+        <span className="pill dim">{items.length}</span>
+        <span className="spacer" />
+        <span className="toast" style={{ minHeight: 0 }}>{cat.hint}</span>
+      </div>
+      {!collapsed && (
+        <div style={{ padding: "4px 16px 14px", borderTop: "0.5px solid var(--border)" }}>
+          {items.map(({ rule, index }) => (
+            <div key={index} className="row" style={{ padding: "5px 0", borderBottom: "0.5px solid var(--border)" }}>
+              <span className="mono" style={{ flex: 1 }}>{rule.value}</span>
+              <span style={{ color: "var(--text-dim)" }}>→</span>
+              <span className="pill dim">{rule.target}</span>
+              <button className="danger" onClick={() => onRemove(index)}>删</button>
+            </div>
+          ))}
+          <div className="row" style={{ marginTop: 10 }}>
+            <input
+              list={cat.id === "app" ? "apps" : cat.id === "domain" ? "domains" : undefined}
+              placeholder={`添加${cat.label}…`}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              style={{ flex: 1 }}
+            />
+            <span style={{ color: "var(--text-dim)" }}>→</span>
+            <select value={target} onChange={(e) => setTarget(e.target.value)}>
+              {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+            <button className="primary" onClick={submit}>添加</button>
+          </div>
+          {cat.id === "app" && <datalist id="apps">{apps.map((a) => <option key={a.path} value={a.name} />)}</datalist>}
+          {cat.id === "domain" && <datalist id="domains">{domains.map((d) => <option key={d} value={d} />)}</datalist>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Routing() {
   const [rules, setRules] = useState<Rule[]>([]);
+  const [groups, setGroups] = useState<string[]>(["🌍 国外流量", "⚡ 自动选择", "DIRECT"]);
   const [apps, setApps] = useState<AppItem[]>([]);
   const [domains, setDomains] = useState<string[]>([]);
   const [backups, setBackups] = useState<string[]>([]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [ip, setIp] = useState<IpInfo | null>(null);
-  const [draft, setDraft] = useState<Rule>({ category: "domain", value: "", target: TARGETS[0] });
+  const [ipLoading, setIpLoading] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [toast, setToast] = useState("");
 
   async function load(): Promise<void> {
     try {
       const model = tryParse<{ rules: Rule[] }>(await routingGet());
-      setRules(model?.rules ?? []);
+      const rs = model?.rules ?? [];
+      setRules(rs);
       setBackups(await routingBackups());
+      // 默认:有规则的分类展开,空的收起
+      const init: Record<string, boolean> = {};
+      CATS.forEach((c) => (init[c.id] = !rs.some((r) => r.category === c.id)));
+      setCollapsed(init);
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
   }
   useEffect(() => {
     void load();
+    void clashGroups().then(setGroups).catch(() => undefined);
     void listApps().then(setApps).catch(() => undefined);
   }, []);
 
-  function addRule(): void {
-    if (!draft.value.trim()) return;
-    setRules((prev) => [...prev, draft]);
-    setDraft({ category: draft.category, value: "", target: draft.target });
+  const byCat = useMemo(() => {
+    const m: Record<string, { rule: Rule; index: number }[]> = {};
+    CATS.forEach((c) => (m[c.id] = []));
+    rules.forEach((rule, index) => m[rule.category]?.push({ rule, index }));
+    return m;
+  }, [rules]);
+
+  function addRule(category: Category, value: string, target: string): void {
+    setRules((prev) => [...prev, { category, value, target }]);
+    setDirty(true);
   }
-  function removeRule(i: number): void {
-    setRules((prev) => prev.filter((_, idx) => idx !== i));
+  function removeRule(index: number): void {
+    setRules((prev) => prev.filter((_, i) => i !== index));
+    setDirty(true);
   }
 
   async function save(): Promise<void> {
     try {
-      setToast(await routingSave(JSON.stringify({ rules })));
+      const msg = await routingSave(JSON.stringify({ rules }));
+      setToast(msg);
+      setDirty(false);
       await load();
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
@@ -79,90 +173,91 @@ export function Routing() {
     try {
       const model = tryParse<{ rules: Rule[] }>(await routingImportClash());
       setRules(model?.rules ?? []);
-      setToast("已从 Clash Merge 导入规则(未写回,确认后点保存)");
+      setDirty(true);
+      setToast("已从 Clash 导入(确认后点保存写回)");
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
   }
   async function loadBookmarks(): Promise<void> {
     try {
-      setDomains(await importBookmarks());
-      setToast(`从书签提取 ${domains.length} 个域名(在值输入框下拉可选)`);
+      const d = await importBookmarks();
+      setDomains(d);
+      setToast(`从书签提取 ${d.length} 个域名(在「域名」里下拉可选)`);
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
   }
   async function checkIp(): Promise<void> {
+    setIpLoading(true);
+    setIp(null);
     try {
       setIp(tryParse<IpInfo>(await exitIpCheck()));
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
+    } finally {
+      setIpLoading(false);
     }
   }
 
   return (
     <div>
-      <h1 className="page-title">网络分流</h1>
-      <p className="page-sub">图形化编排"谁走哪条分流" · 写回 Clash · 不复刻 Clash</p>
-
-      <div className="card">
-        <div className="row">
-          <h3 style={{ margin: 0 }}>规则</h3>
-          <span className="spacer" />
-          <button onClick={() => void importClash()}>从 Clash 导入</button>
-          <button onClick={() => void loadBookmarks()}>读书签域名</button>
-          <button onClick={() => void launchClash().then(setToast)}>打开 Clash Verge</button>
-          <button className="primary" onClick={() => void save()}>保存并写回</button>
+      <div className="row">
+        <div>
+          <h1 className="page-title">网络分流</h1>
+          <p className="page-sub" style={{ margin: 0 }}>按分类编排"谁走哪条分流" · 去向取自当前订阅策略组</p>
         </div>
+        <span className="spacer" />
+        <button onClick={() => void importClash()}>从 Clash 导入</button>
+        <button onClick={() => void loadBookmarks()}>读书签</button>
+        <button onClick={() => void launchClash().then(setToast)}>打开 Clash Verge</button>
+        <button className="primary" onClick={() => void save()} disabled={!dirty}>
+          {dirty ? "保存并写回 ●" : "已保存"}
+        </button>
+      </div>
 
-        <div className="row" style={{ marginTop: 12 }}>
-          <select value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
-            {CATS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-          </select>
-          <input
-            list={draft.category === "app" ? "apps" : "domains"}
-            placeholder={draft.category === "app" ? "应用名(进程)" : "值,如 openai.com / 1.1.1.1/32 / CN"}
-            value={draft.value}
-            style={{ flex: 1, minWidth: 200 }}
-            onChange={(e) => setDraft({ ...draft, value: e.target.value })}
+      <div style={{ marginTop: 18 }}>
+        {CATS.map((cat) => (
+          <CategorySection
+            key={cat.id}
+            cat={cat}
+            items={byCat[cat.id] ?? []}
+            groups={groups}
+            apps={apps}
+            domains={domains}
+            collapsed={collapsed[cat.id] ?? false}
+            onToggle={() => setCollapsed((p) => ({ ...p, [cat.id]: !p[cat.id] }))}
+            onAdd={(v, t) => addRule(cat.id, v, t)}
+            onRemove={removeRule}
           />
-          <datalist id="apps">{apps.map((a) => <option key={a.path} value={a.name} />)}</datalist>
-          <datalist id="domains">{domains.map((d) => <option key={d} value={d} />)}</datalist>
-          <select value={draft.target} onChange={(e) => setDraft({ ...draft, target: e.target.value })}>
-            {TARGETS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <button onClick={addRule}>添加</button>
-        </div>
-
-        <table style={{ marginTop: 12 }}>
-          <thead><tr><th>分类</th><th>值</th><th>去向</th><th></th></tr></thead>
-          <tbody>
-            {rules.map((r, i) => (
-              <tr key={i}>
-                <td>{CATS.find((c) => c.id === r.category)?.label ?? r.category}</td>
-                <td className="mono">{r.value}</td>
-                <td>{r.target}</td>
-                <td><button className="danger" onClick={() => removeRule(i)}>删</button></td>
-              </tr>
-            ))}
-            {rules.length === 0 && <tr><td colSpan={4} className="toast">暂无规则。中国直连兜底会自动附加。</td></tr>}
-          </tbody>
-        </table>
+        ))}
       </div>
 
       <div className="card">
         <div className="row">
           <h3 style={{ margin: 0 }}>出口 IP 纯净度</h3>
           <span className="spacer" />
-          <button onClick={() => void checkIp()}>检测</button>
+          <button className="primary" onClick={() => void checkIp()} disabled={ipLoading}>
+            {ipLoading ? "检测中…" : "检测当前出口"}
+          </button>
         </div>
-        {ip && (
-          <div className="row" style={{ marginTop: 10, gap: 14 }}>
-            <span className="mono">{ip.query}</span>
-            <span>{ip.country} {ip.city}</span>
-            <span style={{ opacity: 0.6 }}>{ip.isp}</span>
-            <span className={`pill ${ip.proxy ? "err" : "ok"}`}>{ip.proxy ? "被标记为代理" : "非代理"}</span>
-            <span className={`pill ${ip.hosting ? "err" : "ok"}`}>{ip.hosting ? "机房IP" : "住宅/非机房"}</span>
+        {ipLoading && <div className="bar" style={{ marginTop: 12 }}><div style={{ width: "40%" }} /></div>}
+        {ip && !ipLoading && (
+          <div style={{ marginTop: 12 }}>
+            <div className="row" style={{ gap: 16, fontSize: 15 }}>
+              <strong className="mono">{ip.query}</strong>
+              <span>{ip.country} · {ip.city}</span>
+            </div>
+            <div className="row" style={{ gap: 10, marginTop: 10 }}>
+              <span className="pill dim">{ip.isp || ip.org}</span>
+              <span className={`pill ${ip.proxy ? "err" : "ok"}`}>{ip.proxy ? "⚠ 被标记为代理 IP" : "✓ 非代理 IP"}</span>
+              <span className={`pill ${ip.hosting ? "err" : "ok"}`}>{ip.hosting ? "⚠ 机房 IP(易被风控)" : "✓ 非机房 IP"}</span>
+            </div>
+            <p className="toast" style={{ marginTop: 10 }}>
+              {ip.proxy || ip.hosting
+                ? "此出口可能触发 GPT/Google 的验证码或风控。换一个住宅/原生 IP 的节点更稳。"
+                : "此出口较干净,适合登录 GPT/Google 等对 IP 敏感的服务。"}
+            </p>
           </div>
         )}
       </div>
