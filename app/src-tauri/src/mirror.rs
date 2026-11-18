@@ -1,13 +1,36 @@
 // 模块一:镜像源管理。与 Go 引擎(本地路由代理)通过 HTTP 控制接口交互,并读写其配置。
 use crate::common::{home, sh, write_file};
 use std::fs;
+use tauri::Manager;
 
 fn cfg_path() -> String {
     format!("{}/.config/proxyhub/config.json", home())
 }
 
-fn engine_bin() -> String {
-    format!("{}/Workspace/proxyhub/engine/proxyhub", home())
+/// 引擎二进制候选:优先用打包进 app 的,其次用工作区构建产物。
+fn engine_candidates(app: &tauri::AppHandle) -> Vec<String> {
+    let mut v = vec![];
+    if let Ok(p) = app
+        .path()
+        .resolve("resources/proxyhub-engine", tauri::path::BaseDirectory::Resource)
+    {
+        v.push(p.to_string_lossy().to_string());
+    }
+    v.push(format!("{}/Workspace/proxyhub/engine/proxyhub", home()));
+    v
+}
+
+/// 若引擎未运行则启动(app 启动时调用)。
+pub fn ensure_engine(app: &tauri::AppHandle) {
+    if engine_running() {
+        return;
+    }
+    for bin in engine_candidates(app) {
+        if std::path::Path::new(&bin).exists() {
+            let _ = std::process::Command::new(&bin).spawn();
+            return;
+        }
+    }
 }
 
 fn port() -> u16 {
@@ -54,20 +77,27 @@ pub fn engine_running() -> bool {
 }
 
 #[tauri::command]
-pub fn engine_start() -> Result<String, String> {
-    let bin = engine_bin();
-    if !std::path::Path::new(&bin).exists() {
-        return Err(format!("引擎二进制不存在: {bin}(请先在 engine/ 下 go build)"));
+pub fn engine_start(app: tauri::AppHandle) -> Result<String, String> {
+    for bin in engine_candidates(&app) {
+        if std::path::Path::new(&bin).exists() {
+            std::process::Command::new(&bin)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok("引擎已启动".into());
+        }
     }
-    std::process::Command::new(&bin)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok("引擎已启动".into())
+    Err("未找到引擎二进制(resources/proxyhub-engine 或工作区 engine/proxyhub)".into())
 }
 
 #[tauri::command]
 pub fn engine_stop() -> Result<String, String> {
-    let _ = sh("pkill", &["-f", "proxyhub/engine/proxyhub"]);
+    // 按端口精确定位引擎进程并结束(避免误杀同名/路径含 proxyhub 的进程)
+    let p = format!("tcp:{}", port());
+    if let Ok(pids) = sh("lsof", &["-ti", &p]) {
+        for pid in pids.split_whitespace() {
+            let _ = sh("kill", &[pid]);
+        }
+    }
     Ok("引擎已停止".into())
 }
 

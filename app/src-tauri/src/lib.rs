@@ -9,6 +9,11 @@ mod routing;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // app 启动即确保镜像引擎在运行(开箱即用)
+            mirror::ensure_engine(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // 模块一 · 镜像源
             mirror::engine_status,

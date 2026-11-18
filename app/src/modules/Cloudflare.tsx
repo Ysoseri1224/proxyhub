@@ -1,11 +1,5 @@
 import { useState } from "react";
-import {
-  cfVerify,
-  cfZones,
-  cfEmailRules,
-  cfEmailAdd,
-  cfOpenConsole,
-} from "../api";
+import { cfZones, cfEmailRules, cfEmailAdd, cfOpenConsole } from "../api";
 import { getErrorMessage, tryParse } from "../util";
 
 interface Zone {
@@ -45,14 +39,13 @@ export function Cloudflare() {
 
   async function loadZones(): Promise<void> {
     try {
-      const v = tryParse<{ success: boolean }>(await cfVerify());
-      if (!v?.success) {
-        setToast("token 无效或未在凭据库存入 CLOUDFLARE_API_TOKEN");
+      const z = tryParse<ZonesResp>(await cfZones());
+      if (!z?.success) {
+        setToast("加载失败:请在「凭据账号」里确认 CLOUDFLARE_API_TOKEN 有效");
         return;
       }
-      const z = tryParse<ZonesResp>(await cfZones());
-      setZones(z?.result ?? []);
-      setToast(`token 有效,拉到 ${z?.result?.length ?? 0} 个域名`);
+      setZones(z.result ?? []);
+      setToast(`拉到 ${z.result?.length ?? 0} 个域名`);
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
