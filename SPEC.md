@@ -92,6 +92,11 @@
 ### 3.5 交互登录托管
 - 需要人工登录的服务:**认证环节交给用户**(你登录),ProxyHub 负责把结果 token/session 持久化到 Keychain。
 
+### 3.6 Cloudflare 控制台 + 域名/邮箱(你明确要进来的)
+- **Cloudflare 控制台快捷入口**:一键打开常用页面(Workers/Pages/D1/R2/Email),省去每次登录控制台的麻烦;用 `CLOUDFLARE_API_TOKEN`(来自 assets.md)直接在面板里读写。
+- **域名邮箱 `leif@ysoseri.us`(Cloudflare Email Routing)**:在 ProxyHub 里管理 catch-all / 别名 / 转发目标(`xxx@ysoseri.us → 某处`)——这才是你要的"多账号可区分"的正解(自有域名支持任意子地址,163 做不到)。
+- 资产概览:可选同步 assets.md 里的站点/Worker/D1/R2 清单做一个总览。
+
 ---
 
 ## 4. 公共能力
@@ -106,7 +111,6 @@
 - ❌ 流量 / 日志统计
 - ❌ geosite/geoip 规则集自动更新
 - ❌ 任何 Clash Verge 已有的面板功能(需要就唤起它)
-- ❌ 邮件聚合/转发(用你自己的域名邮箱 `leif@ysoseri.us` 的 catch-all 解决,不并入本工具)
 
 ---
 
