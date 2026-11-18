@@ -5,7 +5,15 @@
 
 ## 目录
 - `engine/` —— Go 镜像引擎(本地路由代理:多上游池 + 健康检查 + 故障转移 + 磁盘缓存)。✅ 可用
-- (待建)`app/` —— Tauri UI(Apple 原生风格):镜像源管理 + 分流图形化管理。
+- `app/` —— Tauri app(Apple 原生风格,React + TS),四模块。✅ 可构建运行
+
+## app · 运行
+```bash
+cd app && npm install && npm run tauri dev     # 开发运行(打开窗口)
+# 或打包:npm run tauri build  → src-tauri/target/release/bundle/ 下的 .app/.dmg
+```
+四模块:**镜像源**(引擎开关/健康看板/缓存/实时诊断)· **网络分流**(规则图形编排/导入Clash/写回+回滚/出口IP检测)· **凭据账号**(Keychain 加密 + gh 多账号切换)· **Cloudflare**(控制台入口 + 域名邮箱 Email Routing)。
+> 秘密只进 macOS Keychain,仓库零明文。Cloudflare/邮箱需先在"凭据账号"存入 `CLOUDFLARE_API_TOKEN`。
 
 ## 引擎 · 快速使用
 ```bash
