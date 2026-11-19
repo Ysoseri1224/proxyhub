@@ -4,24 +4,22 @@ use crate::common::sh;
 
 const SERVICE: &str = "proxyhub";
 
-fn cf_token() -> Result<String, String> {
+// 从 Keychain 取指定用途的 token:all-round(CLOUDFLARE_API_TOKEN)或邮件分部(CLOUDFLARE_EMAIL_TOKEN)。
+fn cf_token(account: &str) -> Result<String, String> {
     sh(
         "security",
-        &[
-            "find-generic-password",
-            "-s",
-            SERVICE,
-            "-a",
-            "CLOUDFLARE_API_TOKEN",
-            "-w",
-        ],
+        &["find-generic-password", "-s", SERVICE, "-a", account, "-w"],
     )
     .map(|s| s.trim_end().to_string())
-    .map_err(|_| "未在凭据库找到 CLOUDFLARE_API_TOKEN(先在模块三里存入)".into())
+    .map_err(|_| format!("未在凭据库找到 {account}(先在「凭据账号」存入)"))
 }
 
 fn cf_api(method: &str, path: &str, body: Option<&str>) -> Result<String, String> {
-    let token = cf_token()?;
+    cf_api_with("CLOUDFLARE_API_TOKEN", method, path, body)
+}
+
+fn cf_api_with(token_account: &str, method: &str, path: &str, body: Option<&str>) -> Result<String, String> {
+    let token = cf_token(token_account)?;
     let url = format!("https://api.cloudflare.com/client/v4{path}");
     let auth = format!("Authorization: Bearer {token}");
     let mut args: Vec<String> = vec![
@@ -59,13 +57,19 @@ pub fn cf_zones() -> Result<String, String> {
 /// 列出某 zone 的邮箱路由规则(catch-all / 别名 / 转发目标)。
 #[tauri::command]
 pub fn cf_email_rules(zone_id: String) -> Result<String, String> {
-    cf_api("GET", &format!("/zones/{zone_id}/email/routing/rules"), None)
+    cf_api_with(
+        "CLOUDFLARE_EMAIL_TOKEN",
+        "GET",
+        &format!("/zones/{zone_id}/email/routing/rules"),
+        None,
+    )
 }
 
 /// 列出已验证的转发目标地址。
 #[tauri::command]
 pub fn cf_email_destinations(account_id: String) -> Result<String, String> {
-    cf_api(
+    cf_api_with(
+        "CLOUDFLARE_EMAIL_TOKEN",
         "GET",
         &format!("/accounts/{account_id}/email/routing/addresses"),
         None,
@@ -82,7 +86,8 @@ pub fn cf_email_add(zone_id: String, alias: String, dest: String) -> Result<Stri
         "actions": [{"type":"forward","value":[dest]}]
     })
     .to_string();
-    cf_api(
+    cf_api_with(
+        "CLOUDFLARE_EMAIL_TOKEN",
         "POST",
         &format!("/zones/{zone_id}/email/routing/rules"),
         Some(&body),
@@ -92,7 +97,8 @@ pub fn cf_email_add(zone_id: String, alias: String, dest: String) -> Result<Stri
 /// 删除一条邮箱路由规则。
 #[tauri::command]
 pub fn cf_email_delete(zone_id: String, rule_id: String) -> Result<String, String> {
-    cf_api(
+    cf_api_with(
+        "CLOUDFLARE_EMAIL_TOKEN",
         "DELETE",
         &format!("/zones/{zone_id}/email/routing/rules/{rule_id}"),
         None,

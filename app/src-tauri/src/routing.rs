@@ -183,48 +183,58 @@ pub struct AppItem {
     path: String,
 }
 
-fn scan_apps(dir: &str, out: &mut Vec<AppItem>) {
+// 平铺扫描单个目录(不递归、跳过符号链接别名,避免回环与重复开销)。
+fn scan_apps_flat(dir: &str, out: &mut Vec<AppItem>) {
     let rd = match fs::read_dir(dir) {
         Ok(r) => r,
         Err(_) => return,
     };
     for e in rd.flatten() {
-        let fname = e.file_name().to_string_lossy().to_string();
-        let path = e.path();
-        if fname.ends_with(".app") {
-            // 进程名 = Contents/MacOS/ 里的主可执行文件名
-            let mut process = fname.trim_end_matches(".app").to_string();
-            if let Ok(macos) = fs::read_dir(path.join("Contents/MacOS")) {
-                if let Some(f) = macos.flatten().next() {
-                    process = f.file_name().to_string_lossy().to_string();
-                }
-            }
-            out.push(AppItem {
-                name: fname.trim_end_matches(".app").to_string(),
-                process,
-                path: path.to_string_lossy().to_string(),
-            });
-        } else if path.is_dir() {
-            // 递归一层(Utilities 等子目录)
-            scan_apps(&path.to_string_lossy(), out);
+        // 跳过符号链接(如 ~/Applications/分类 下的别名),防回环空转
+        if e.path()
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
         }
+        let fname = e.file_name().to_string_lossy().to_string();
+        if !fname.ends_with(".app") {
+            continue;
+        }
+        let path = e.path();
+        // 进程名 = Contents/MacOS/ 里的主可执行文件名(mihomo PROCESS-NAME 匹配用)
+        let mut process = fname.trim_end_matches(".app").to_string();
+        if let Ok(macos) = fs::read_dir(path.join("Contents/MacOS")) {
+            if let Some(f) = macos.flatten().next() {
+                process = f.file_name().to_string_lossy().to_string();
+            }
+        }
+        out.push(AppItem {
+            name: fname.trim_end_matches(".app").to_string(),
+            process,
+            path: path.to_string_lossy().to_string(),
+        });
     }
 }
 
-/// 枚举本机全部 App 及其真实进程名(含系统、工具、用户目录)。
+/// 枚举本机全部 App 及其真实进程名(固定目录、平铺、不跟符号链接——快且不卡)。
 #[tauri::command]
 pub fn list_apps() -> Result<Vec<AppItem>, String> {
+    let h = home();
     let dirs = [
         "/Applications".to_string(),
+        "/Applications/Utilities".to_string(),
         "/System/Applications".to_string(),
-        format!("{}/Applications", home()),
+        "/System/Applications/Utilities".to_string(),
+        format!("{h}/Applications"),
     ];
     let mut out = vec![];
     for d in dirs {
-        scan_apps(&d, &mut out);
+        scan_apps_flat(&d, &mut out);
     }
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    out.dedup_by(|a, b| a.process == b.process && a.name == b.name);
+    out.dedup_by(|a, b| a.name == b.name);
     Ok(out)
 }
 

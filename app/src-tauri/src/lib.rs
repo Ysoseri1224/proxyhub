@@ -10,8 +10,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // app 启动即确保镜像引擎在运行(开箱即用)
-            mirror::ensure_engine(app.handle());
+            common::ensure_path(); // 注入 PATH,GUI 下也能找到 gh/npm/wrangler 等
+            mirror::ensure_engine(app.handle()); // 启动即拉起镜像引擎
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

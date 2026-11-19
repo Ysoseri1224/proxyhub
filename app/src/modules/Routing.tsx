@@ -142,8 +142,16 @@ export function Routing() {
   useEffect(() => {
     void load();
     void clashGroups().then(setGroups).catch(() => undefined);
-    void listApps().then(setApps).catch(() => undefined);
+    // 注意:app 列表懒加载(展开「应用」分类时才扫),避免进页面就卡
   }, []);
+
+  function toggleCat(id: string): void {
+    const opening = collapsed[id] !== false;
+    setCollapsed((p) => ({ ...p, [id]: !p[id] }));
+    if (opening && id === "app" && apps.length === 0) {
+      void listApps().then(setApps).catch(() => undefined);
+    }
+  }
 
   const byCat = useMemo(() => {
     const m: Record<string, { rule: Rule; index: number }[]> = {};
@@ -229,7 +237,7 @@ export function Routing() {
             apps={apps}
             domains={domains}
             collapsed={collapsed[cat.id] ?? false}
-            onToggle={() => setCollapsed((p) => ({ ...p, [cat.id]: !p[cat.id] }))}
+            onToggle={() => toggleCat(cat.id)}
             onAdd={(v, t) => addRule(cat.id, v, t)}
             onRemove={removeRule}
           />
