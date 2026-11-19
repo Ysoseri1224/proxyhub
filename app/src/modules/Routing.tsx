@@ -103,7 +103,7 @@ function CategorySection({ cat, items, groups, apps, domains, collapsed, onToggl
             </select>
             <button className="primary" onClick={submit}>添加</button>
           </div>
-          {cat.id === "app" && <datalist id="apps">{apps.map((a) => <option key={a.path} value={a.name} />)}</datalist>}
+          {cat.id === "app" && <datalist id="apps">{apps.map((a) => <option key={a.path} value={a.process}>{a.name}</option>)}</datalist>}
           {cat.id === "domain" && <datalist id="domains">{domains.map((d) => <option key={d} value={d} />)}</datalist>}
         </div>
       )}
@@ -116,6 +116,8 @@ export function Routing() {
   const [groups, setGroups] = useState<string[]>(["🌍 国外流量", "⚡ 自动选择", "DIRECT"]);
   const [apps, setApps] = useState<AppItem[]>([]);
   const [domains, setDomains] = useState<string[]>([]);
+  const [showBm, setShowBm] = useState(false);
+  const [bmFilter, setBmFilter] = useState("");
   const [backups, setBackups] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [ip, setIp] = useState<IpInfo | null>(null);
@@ -183,7 +185,8 @@ export function Routing() {
     try {
       const d = await importBookmarks();
       setDomains(d);
-      setToast(`从书签提取 ${d.length} 个域名(在「域名」里下拉可选)`);
+      setShowBm(true);
+      setToast(d.length ? `从浏览器书签提取 ${d.length} 个域名,点下方域名即可加为规则` : "未读到书签(Chrome/Edge/Brave/Safari)");
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
@@ -232,6 +235,28 @@ export function Routing() {
           />
         ))}
       </div>
+
+      {showBm && (
+        <div className="card">
+          <div className="row">
+            <h3 style={{ margin: 0 }}>浏览器书签域名({domains.length})</h3>
+            <input placeholder="过滤…" value={bmFilter} onChange={(e) => setBmFilter(e.target.value)} style={{ width: 140 }} />
+            <span className="spacer" />
+            <button onClick={() => setShowBm(false)}>收起</button>
+          </div>
+          <div className="row" style={{ gap: 6, marginTop: 10, maxHeight: 180, overflowY: "auto" }}>
+            {domains
+              .filter((d) => d.includes(bmFilter))
+              .map((d) => (
+                <button key={d} className="mono" style={{ fontSize: 11.5, padding: "3px 9px" }}
+                  onClick={() => { addRule("domain", d, groups[0] ?? "DIRECT"); setToast(`已加规则:${d} → ${groups[0]}`); }}>
+                  + {d}
+                </button>
+              ))}
+            {domains.length === 0 && <span className="toast">没有可用书签域名。</span>}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="row">

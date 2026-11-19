@@ -42,6 +42,9 @@ pub fn run() {
             creds::cred_delete,
             creds::gh_accounts,
             creds::gh_switch,
+            creds::import_password_book,
+            creds::tool_logins,
+            creds::run_in_terminal,
             // 模块三.6 · Cloudflare / 邮箱
             cloudflare::cf_verify,
             cloudflare::cf_zones,

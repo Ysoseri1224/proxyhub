@@ -18,7 +18,7 @@ export const routingSave = (json: string) => invoke<string>("routing_save", { js
 export const routingBackups = () => invoke<string[]>("routing_backups");
 export const routingRollback = (name: string) => invoke<string>("routing_rollback", { name });
 export const routingImportClash = () => invoke<string>("routing_import_clash");
-export type AppItem = { name: string; path: string };
+export type AppItem = { name: string; process: string; path: string };
 export const listApps = () => invoke<AppItem[]>("list_apps");
 export const importBookmarks = () => invoke<string[]>("import_bookmarks");
 export const clashGroups = () => invoke<string[]>("clash_groups");
@@ -35,6 +35,10 @@ export const credDelete = (name: string) => invoke<void>("cred_delete", { name }
 export type GhAccount = { user: string; active: boolean };
 export const ghAccounts = () => invoke<GhAccount[]>("gh_accounts");
 export const ghSwitch = (user: string) => invoke<string>("gh_switch", { user });
+export const importPasswordBook = () => invoke<string>("import_password_book");
+export type ToolLogin = { tool: string; logged_in: boolean; detail: string; login_cmd: string };
+export const toolLogins = () => invoke<ToolLogin[]>("tool_logins");
+export const runInTerminal = (cmd: string) => invoke<string>("run_in_terminal", { cmd });
 
 // 模块三.6 · Cloudflare / 邮箱
 export const cfVerify = () => invoke<string>("cf_verify");

@@ -179,70 +179,162 @@ pub fn routing_import_clash() -> Result<String, String> {
 #[derive(Serialize)]
 pub struct AppItem {
     name: String,
+    process: String, // 真实可执行/进程名(mihomo PROCESS-NAME 匹配用)
     path: String,
 }
 
+fn scan_apps(dir: &str, out: &mut Vec<AppItem>) {
+    let rd = match fs::read_dir(dir) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    for e in rd.flatten() {
+        let fname = e.file_name().to_string_lossy().to_string();
+        let path = e.path();
+        if fname.ends_with(".app") {
+            // 进程名 = Contents/MacOS/ 里的主可执行文件名
+            let mut process = fname.trim_end_matches(".app").to_string();
+            if let Ok(macos) = fs::read_dir(path.join("Contents/MacOS")) {
+                if let Some(f) = macos.flatten().next() {
+                    process = f.file_name().to_string_lossy().to_string();
+                }
+            }
+            out.push(AppItem {
+                name: fname.trim_end_matches(".app").to_string(),
+                process,
+                path: path.to_string_lossy().to_string(),
+            });
+        } else if path.is_dir() {
+            // 递归一层(Utilities 等子目录)
+            scan_apps(&path.to_string_lossy(), out);
+        }
+    }
+}
+
+/// 枚举本机全部 App 及其真实进程名(含系统、工具、用户目录)。
 #[tauri::command]
 pub fn list_apps() -> Result<Vec<AppItem>, String> {
     let dirs = [
         "/Applications".to_string(),
+        "/System/Applications".to_string(),
         format!("{}/Applications", home()),
     ];
     let mut out = vec![];
     for d in dirs {
-        if let Ok(rd) = fs::read_dir(&d) {
+        scan_apps(&d, &mut out);
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.dedup_by(|a, b| a.process == b.process && a.name == b.name);
+    Ok(out)
+}
+
+/// 读取所有浏览器(Chrome/Edge/Brave 各身份 + Safari)的书签/收藏,提取去重域名。
+#[tauri::command]
+pub fn import_bookmarks() -> Result<Vec<String>, String> {
+    let base = format!("{}/Library/Application Support", home());
+    let mut domains = std::collections::BTreeSet::new();
+
+    // Chromium 系:Chrome / Edge / Brave,各含多 profile,书签是 JSON
+    let chromium_roots = [
+        format!("{base}/Google/Chrome"),
+        format!("{base}/Microsoft Edge"),
+        format!("{base}/BraveSoftware/Brave-Browser"),
+    ];
+    for root in chromium_roots {
+        let mut profiles = vec!["Default".to_string()];
+        if let Ok(rd) = fs::read_dir(&root) {
             for e in rd.flatten() {
-                let name = e.file_name().to_string_lossy().to_string();
-                if name.ends_with(".app") {
-                    out.push(AppItem {
-                        name: name.trim_end_matches(".app").to_string(),
-                        path: e.path().to_string_lossy().to_string(),
-                    });
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.starts_with("Profile ") {
+                    profiles.push(n);
+                }
+            }
+        }
+        for p in profiles {
+            if let Ok(s) = fs::read_to_string(format!("{root}/{p}/Bookmarks")) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                    collect_urls(&v, &mut domains);
                 }
             }
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    Ok(out)
-}
 
-/// 从 Chrome 各身份的书签里提取去重后的域名。
-#[tauri::command]
-pub fn import_bookmarks() -> Result<Vec<String>, String> {
-    let base = format!("{}/Library/Application Support/Google/Chrome", home());
-    let mut domains = std::collections::BTreeSet::new();
-    let mut profiles = vec!["Default".to_string()];
-    if let Ok(rd) = fs::read_dir(&base) {
-        for e in rd.flatten() {
-            let n = e.file_name().to_string_lossy().to_string();
-            if n.starts_with("Profile ") {
-                profiles.push(n);
-            }
-        }
-    }
-    for p in profiles {
-        let bm = format!("{}/{}/Bookmarks", base, p);
-        if let Ok(s) = fs::read_to_string(&bm) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+    // Safari 书签是 plist(需 Full Disk Access,拿不到会被跳过)
+    let safari = format!("{}/Library/Safari/Bookmarks.plist", home());
+    if std::path::Path::new(&safari).exists() {
+        if let Ok(out) = sh("plutil", &["-convert", "json", "-o", "-", &safari]) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
                 collect_urls(&v, &mut domains);
             }
         }
     }
+
+    // 书签 HTML 导出(浏览器未同步到本地时的真实来源,如迁移导出目录)
+    let html_dirs = [format!("{}/Workspace/C-Users-aaron/浏览器书签", home())];
+    for dir in html_dirs {
+        if let Ok(rd) = fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("html") {
+                    if let Ok(s) = fs::read_to_string(&p) {
+                        collect_html_hrefs(&s, &mut domains);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(domains.into_iter().collect())
+}
+
+/// 从书签 HTML 导出里提取 href 域名(手写扫描,不引入正则依赖)。
+fn collect_html_hrefs(html: &str, out: &mut std::collections::BTreeSet<String>) {
+    let lower = html.to_lowercase();
+    let bytes = html.as_bytes();
+    let mut idx = 0;
+    while let Some(pos) = lower[idx..].find("href=") {
+        let start = idx + pos + 5;
+        idx = start;
+        if start >= bytes.len() {
+            break;
+        }
+        let quote = bytes[start];
+        if quote != b'"' && quote != b'\'' {
+            continue;
+        }
+        let content_start = start + 1;
+        if let Some(end) = html[content_start..].find(quote as char) {
+            let url = &html[content_start..content_start + end];
+            if let Some(host) = url
+                .split("//")
+                .nth(1)
+                .and_then(|r| r.split('/').next())
+                .map(|h| h.trim_start_matches("www."))
+            {
+                if host.contains('.') {
+                    out.insert(host.to_string());
+                }
+            }
+            idx = content_start + end;
+        }
+    }
 }
 
 fn collect_urls(v: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
     match v {
         serde_json::Value::Object(m) => {
-            if let Some(serde_json::Value::String(url)) = m.get("url") {
-                if let Some(host) = url
-                    .split("//")
-                    .nth(1)
-                    .and_then(|r| r.split('/').next())
-                    .map(|h| h.trim_start_matches("www."))
-                {
-                    if host.contains('.') {
-                        out.insert(host.to_string());
+            // Chromium 用 "url";Safari 用 "URLString"
+            for key in ["url", "URLString"] {
+                if let Some(serde_json::Value::String(url)) = m.get(key) {
+                    if let Some(host) = url
+                        .split("//")
+                        .nth(1)
+                        .and_then(|r| r.split('/').next())
+                        .map(|h| h.trim_start_matches("www."))
+                    {
+                        if host.contains('.') {
+                            out.insert(host.to_string());
+                        }
                     }
                 }
             }
