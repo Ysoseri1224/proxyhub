@@ -114,6 +114,63 @@ pub fn engine_stop() -> Result<String, String> {
     Ok("引擎已停止".into())
 }
 
+#[derive(serde::Serialize)]
+pub struct ToolPointing {
+    tool: String,
+    current: String,
+    on_engine: bool,
+}
+
+/// 看 pip/npm/go 当前各指向哪(官方 / 国内源 / 本引擎)。
+#[tauri::command]
+pub fn tool_pointing() -> Result<Vec<ToolPointing>, String> {
+    let h = home();
+    let eng = format!("127.0.0.1:{}", port());
+    let mut out = vec![];
+
+    let pip = fs::read_to_string(format!("{h}/.config/pip/pip.conf")).unwrap_or_default();
+    let pip_url = pip
+        .lines()
+        .find(|l| l.contains("index-url"))
+        .and_then(|l| l.split('=').nth(1))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "官方 pypi.org".into());
+    out.push(ToolPointing { on_engine: pip_url.contains(&eng), tool: "pip".into(), current: pip_url });
+
+    let npm = sh("npm", &["config", "get", "registry"]).unwrap_or_else(|_| "?".into()).trim().to_string();
+    out.push(ToolPointing { on_engine: npm.contains(&eng), tool: "npm".into(), current: npm });
+
+    let go = sh("go", &["env", "GOPROXY"]).unwrap_or_default().trim().to_string();
+    out.push(ToolPointing { on_engine: go.contains(&eng), tool: "go".into(), current: if go.is_empty() { "?".into() } else { go } });
+
+    Ok(out)
+}
+
+/// 一键让 pip/npm/go 指向本引擎(所有拉取走引擎:择源+故障转移+缓存)。
+#[tauri::command]
+pub fn engine_takeover() -> Result<String, String> {
+    let base = format!("http://127.0.0.1:{}", port());
+    write_file(
+        &format!("{}/.config/pip/pip.conf", home()),
+        &format!("[global]\nindex-url = {base}/pypi/\ntrusted-host = 127.0.0.1\n"),
+    )?;
+    let _ = sh("npm", &["config", "set", "registry", &format!("{base}/npm/")]);
+    let _ = sh("go", &["env", "-w", &format!("GOPROXY={base}/go/")]);
+    Ok("pip / npm / go 已指向引擎".into())
+}
+
+/// 一键还原 pip/npm/go 为官方源。
+#[tauri::command]
+pub fn engine_restore() -> Result<String, String> {
+    write_file(
+        &format!("{}/.config/pip/pip.conf", home()),
+        "[global]\nindex-url = https://pypi.org/simple/\n",
+    )?;
+    let _ = sh("npm", &["config", "set", "registry", "https://registry.npmjs.org"]);
+    let _ = sh("go", &["env", "-w", "GOPROXY=https://proxy.golang.org,direct"]);
+    Ok("pip / npm / go 已还原官方源".into())
+}
+
 #[tauri::command]
 pub fn mirror_config_get() -> Result<String, String> {
     fs::read_to_string(cfg_path()).map_err(|e| e.to_string())

@@ -6,6 +6,10 @@ import {
   engineRunning,
   engineStart,
   engineStop,
+  toolPointing,
+  engineTakeover,
+  engineRestore,
+  type ToolPointing,
 } from "../api";
 import { getErrorMessage, tryParse, formatBytes } from "../util";
 
@@ -40,6 +44,7 @@ export function Mirror() {
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [events, setEvents] = useState<RouteEvent[]>([]);
+  const [pointing, setPointing] = useState<ToolPointing[]>([]);
   const [toast, setToast] = useState("");
 
   async function refresh(): Promise<void> {
@@ -51,6 +56,7 @@ export function Mirror() {
         const evs = tryParse<RouteEvent[]>(await engineDiagnose());
         if (evs) setEvents(evs.slice(-12).reverse());
       }
+      setPointing(await toolPointing());
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
@@ -90,6 +96,27 @@ export function Mirror() {
             <button className="primary" onClick={() => void act(engineStart)}>启动</button>
           )}
         </div>
+      </div>
+
+      <div className="card">
+        <div className="row">
+          <h3 style={{ margin: 0 }}>工具接管</h3>
+          <span className="spacer" />
+          <button className="primary" onClick={() => void act(engineTakeover)}>一键接管 pip/npm/go</button>
+          <button onClick={() => void act(engineRestore)}>还原官方源</button>
+        </div>
+        <table style={{ marginTop: 10 }}>
+          <thead><tr><th>工具</th><th>当前指向</th><th>状态</th></tr></thead>
+          <tbody>
+            {pointing.map((p) => (
+              <tr key={p.tool}>
+                <td style={{ fontWeight: 600 }}>{p.tool}</td>
+                <td className="mono" style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis" }}>{p.current}</td>
+                <td><span className={`pill ${p.on_engine ? "ok" : "dim"}`}>{p.on_engine ? "走引擎" : "未接管"}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {status && (

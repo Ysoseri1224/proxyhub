@@ -10,6 +10,10 @@ export const engineStart = () => invoke<string>("engine_start");
 export const engineStop = () => invoke<string>("engine_stop");
 export const mirrorConfigGet = () => invoke<string>("mirror_config_get");
 export const mirrorConfigSave = (json: string) => invoke<void>("mirror_config_save", { json });
+export type ToolPointing = { tool: string; current: string; on_engine: boolean };
+export const toolPointing = () => invoke<ToolPointing[]>("tool_pointing");
+export const engineTakeover = () => invoke<string>("engine_takeover");
+export const engineRestore = () => invoke<string>("engine_restore");
 
 // 模块二 · 网络分流
 export type Rule = { category: string; value: string; target: string };

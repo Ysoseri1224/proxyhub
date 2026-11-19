@@ -24,6 +24,9 @@ pub fn run() {
             mirror::engine_stop,
             mirror::mirror_config_get,
             mirror::mirror_config_save,
+            mirror::tool_pointing,
+            mirror::engine_takeover,
+            mirror::engine_restore,
             // 模块二 · 网络分流
             routing::routing_get,
             routing::routing_save,
