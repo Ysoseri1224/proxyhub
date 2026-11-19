@@ -27,6 +27,9 @@ pub fn run() {
             mirror::tool_pointing,
             mirror::engine_takeover,
             mirror::engine_restore,
+            mirror::mirror_add_upstream,
+            mirror::mirror_remove_upstream,
+            mirror::mirror_add_ecosystem,
             // 模块二 · 网络分流
             routing::routing_get,
             routing::routing_save,

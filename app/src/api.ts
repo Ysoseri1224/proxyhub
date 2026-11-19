@@ -14,6 +14,12 @@ export type ToolPointing = { tool: string; current: string; on_engine: boolean }
 export const toolPointing = () => invoke<ToolPointing[]>("tool_pointing");
 export const engineTakeover = () => invoke<string>("engine_takeover");
 export const engineRestore = () => invoke<string>("engine_restore");
+export const mirrorAddUpstream = (eco: string, name: string, base: string) =>
+  invoke<string>("mirror_add_upstream", { eco, name, base });
+export const mirrorRemoveUpstream = (eco: string, name: string) =>
+  invoke<string>("mirror_remove_upstream", { eco, name });
+export const mirrorAddEcosystem = (name: string, prefix: string, upName: string, upBase: string) =>
+  invoke<string>("mirror_add_ecosystem", { name, prefix, upName, upBase });
 
 // 模块二 · 网络分流
 export type Rule = { category: string; value: string; target: string };

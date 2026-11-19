@@ -9,6 +9,9 @@ import {
   toolPointing,
   engineTakeover,
   engineRestore,
+  mirrorAddUpstream,
+  mirrorRemoveUpstream,
+  mirrorAddEcosystem,
   type ToolPointing,
 } from "../api";
 import { getErrorMessage, tryParse, formatBytes } from "../util";
@@ -46,6 +49,11 @@ export function Mirror() {
   const [events, setEvents] = useState<RouteEvent[]>([]);
   const [pointing, setPointing] = useState<ToolPointing[]>([]);
   const [toast, setToast] = useState("");
+  const [busy, setBusy] = useState(false);
+  // 每个生态的「新增镜像」输入框(name/base)
+  const [addUp, setAddUp] = useState<Record<string, { name: string; base: string }>>({});
+  // 新增生态表单
+  const [newEco, setNewEco] = useState({ name: "", prefix: "", upName: "", upBase: "" });
 
   async function refresh(): Promise<void> {
     try {
@@ -75,6 +83,38 @@ export function Mirror() {
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
+  }
+
+  // 改镜像源会重启引擎(数秒),期间禁用按钮并提示
+  async function mutate(fn: () => Promise<string>): Promise<void> {
+    setBusy(true);
+    setToast("正在应用并重载引擎…");
+    try {
+      setToast(await fn());
+      await refresh();
+    } catch (error: unknown) {
+      setToast(getErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function upDraft(eco: string): { name: string; base: string } {
+    return addUp[eco] ?? { name: "", base: "" };
+  }
+  function setUpDraft(eco: string, patch: Partial<{ name: string; base: string }>): void {
+    setAddUp((p) => ({ ...p, [eco]: { ...upDraft(eco), ...patch } }));
+  }
+  async function submitUpstream(eco: string): Promise<void> {
+    const d = upDraft(eco);
+    if (!d.name.trim() || !d.base.trim()) return;
+    await mutate(() => mirrorAddUpstream(eco, d.name.trim(), d.base.trim()));
+    setAddUp((p) => ({ ...p, [eco]: { name: "", base: "" } }));
+  }
+  async function submitEcosystem(): Promise<void> {
+    if (!newEco.name.trim() || !newEco.upName.trim() || !newEco.upBase.trim()) return;
+    await mutate(() => mirrorAddEcosystem(newEco.name.trim(), newEco.prefix.trim(), newEco.upName.trim(), newEco.upBase.trim()));
+    setNewEco({ name: "", prefix: "", upName: "", upBase: "" });
   }
 
   const cachePct = status ? (status.cacheBytes / (status.cacheMaxMB * 1024 * 1024)) * 100 : 0;
@@ -121,27 +161,69 @@ export function Mirror() {
 
       {status && (
         <div className="card">
-          <h3>各生态上游健康</h3>
-          <table>
-            <thead>
-              <tr><th>生态</th><th>端点前缀</th><th>上游(延迟)</th></tr>
-            </thead>
-            <tbody>
-              {status.ecosystems.map((e) => (
-                <tr key={e.name}>
-                  <td style={{ fontWeight: 600 }}>{e.name}</td>
-                  <td className="mono">{e.prefix}</td>
-                  <td>
-                    {e.upstreams.map((u) => (
-                      <span key={u.name} className={`pill ${u.up ? "ok" : "err"}`} style={{ marginRight: 6 }}>
-                        {u.name} {u.up ? `${u.latency.toFixed(1)}s` : "✗"}
-                      </span>
-                    ))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="row">
+            <h3 style={{ margin: 0 }}>镜像源管理</h3>
+            <span className="toast" style={{ minHeight: 0 }}>每个生态可多上游,引擎按健康择优 · 改动即时重载</span>
+            {busy && <span className="pill dim">重载中…</span>}
+          </div>
+          {status.ecosystems.map((e) => (
+            <div key={e.name} style={{ marginTop: 14, paddingTop: 12, borderTop: "0.5px solid var(--border)" }}>
+              <div className="row">
+                <strong>{e.name}</strong>
+                <span className="mono" style={{ opacity: 0.6 }}>{e.prefix}</span>
+                <span className="pill dim">{e.upstreams.length} 个上游</span>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                {e.upstreams.map((u) => (
+                  <div key={u.name} className="row" style={{ padding: "4px 0" }}>
+                    <span className={`pill ${u.up ? "ok" : "err"}`}>{u.up ? `${u.latency.toFixed(1)}s` : "✗"}</span>
+                    <strong style={{ minWidth: 90 }}>{u.name}</strong>
+                    <span className="mono" style={{ flex: 1, opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.base}</span>
+                    <button
+                      className="danger"
+                      disabled={busy || e.upstreams.length <= 1}
+                      title={e.upstreams.length <= 1 ? "至少保留一个镜像" : "移除此镜像"}
+                      onClick={() => void mutate(() => mirrorRemoveUpstream(e.name, u.name))}
+                    >删</button>
+                  </div>
+                ))}
+              </div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <input
+                  placeholder="镜像名,如 ustc"
+                  value={upDraft(e.name).name}
+                  disabled={busy}
+                  onChange={(ev) => setUpDraft(e.name, { name: ev.target.value })}
+                  style={{ width: 120 }}
+                />
+                <input
+                  placeholder="https://镜像地址/…"
+                  value={upDraft(e.name).base}
+                  disabled={busy}
+                  onChange={(ev) => setUpDraft(e.name, { base: ev.target.value })}
+                  onKeyDown={(ev) => ev.key === "Enter" && void submitUpstream(e.name)}
+                  style={{ flex: 1 }}
+                />
+                <button className="primary" disabled={busy} onClick={() => void submitUpstream(e.name)}>新增镜像</button>
+              </div>
+            </div>
+          ))}
+
+          <div style={{ marginTop: 16, paddingTop: 12, borderTop: "0.5px solid var(--border)" }}>
+            <div className="row"><strong>新增生态</strong><span className="toast" style={{ minHeight: 0 }}>如私有仓库;前缀留空则用 /生态名/</span></div>
+            <div className="row" style={{ marginTop: 8, gap: 6 }}>
+              <input placeholder="生态名,如 conda" value={newEco.name} disabled={busy}
+                onChange={(e) => setNewEco((p) => ({ ...p, name: e.target.value }))} style={{ width: 120 }} />
+              <input placeholder="路由前缀 /conda/" value={newEco.prefix} disabled={busy}
+                onChange={(e) => setNewEco((p) => ({ ...p, prefix: e.target.value }))} style={{ width: 120 }} />
+              <input placeholder="首个镜像名" value={newEco.upName} disabled={busy}
+                onChange={(e) => setNewEco((p) => ({ ...p, upName: e.target.value }))} style={{ width: 110 }} />
+              <input placeholder="https://镜像地址/…" value={newEco.upBase} disabled={busy}
+                onChange={(e) => setNewEco((p) => ({ ...p, upBase: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && void submitEcosystem()} style={{ flex: 1 }} />
+              <button className="primary" disabled={busy} onClick={() => void submitEcosystem()}>新增生态</button>
+            </div>
+          </div>
         </div>
       )}
 
