@@ -16,17 +16,78 @@ pub struct RoutingModel {
     pub rules: Vec<Rule>,
 }
 
+/// 写入 Merge.yaml 时的首行标记:据此判断该文件是否为 ProxyHub 下发(未被 Clash 重置)。
+const MARKER: &str = "由 ProxyHub 生成";
+
+fn clash_app_dir() -> String {
+    format!(
+        "{}/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev",
+        home()
+    )
+}
+
 fn routing_json() -> String {
     format!("{}/.config/proxyhub/routing.json", home())
 }
 fn merge_yaml() -> String {
-    format!(
-        "{}/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/profiles/Merge.yaml",
-        home()
-    )
+    format!("{}/profiles/Merge.yaml", clash_app_dir())
 }
 fn backup_dir() -> String {
     format!("{}/.config/proxyhub/routing-backups", home())
+}
+
+/// 从 Clash Verge 配置里解析出 mihomo 控制接口的 unix socket 路径。
+fn mihomo_sock() -> Option<String> {
+    for f in ["config.yaml", "clash-verge.yaml"] {
+        if let Ok(s) = fs::read_to_string(format!("{}/{}", clash_app_dir(), f)) {
+            for line in s.lines() {
+                if let Some(v) = line.trim().strip_prefix("external-controller-unix:") {
+                    let v = v.trim().trim_matches('"').trim_matches('\'');
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 从 Clash Verge 配置里解析出 mihomo 控制接口的 TCP 地址(socket 不可用时回退)。
+fn mihomo_tcp() -> Option<String> {
+    for f in ["clash-verge.yaml", "config.yaml"] {
+        if let Ok(s) = fs::read_to_string(format!("{}/{}", clash_app_dir(), f)) {
+            for line in s.lines() {
+                if let Some(v) = line.trim().strip_prefix("external-controller:") {
+                    let v = v.trim().trim_matches('"').trim_matches('\'');
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 向 mihomo 控制接口发 GET(优先 unix socket,其次 TCP)。
+fn mihomo_get(path: &str) -> Result<String, String> {
+    if let Some(sock) = mihomo_sock() {
+        return sh(
+            "curl",
+            &["-s", "--max-time", "4", "--unix-socket", &sock, &format!("http://localhost{path}")],
+        );
+    }
+    if let Some(tcp) = mihomo_tcp() {
+        return sh("curl", &["-s", "--max-time", "4", &format!("http://{tcp}{path}")]);
+    }
+    Err("未找到 mihomo 控制接口(Clash Verge 未运行?)".into())
+}
+
+fn clash_running() -> bool {
+    ["verge-mihomo", "clash-verge", "mihomo"].iter().any(|p| {
+        sh("pgrep", &["-x", p]).map(|s| !s.trim().is_empty()).unwrap_or(false)
+    })
 }
 
 fn cat_to_type(cat: &str) -> &'static str {
@@ -99,20 +160,30 @@ pub fn routing_save(json: String) -> Result<String, String> {
         write_file(&bp, &cur)?;
         backed = bp;
     }
-    // 2) 保存模型
+    // 2) 保存模型(ProxyHub 自身才是权威)
     write_file(&routing_json(), &json)?;
     // 3) 生成并写 Merge.yaml
-    write_file(&merge_yaml(), &gen_merge(&model))?;
-    // 4) Clash Verge 正在运行时会管理/可能覆盖该文件,明确提示而非静默
-    let clash_running = sh("pgrep", &["-x", "clash-verge"])
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-    let warn = if clash_running {
-        " ⚠ Clash Verge 正在运行:请在其中「重新激活订阅」以加载;若规则被覆盖,关闭 Clash Verge 后再保存。"
+    let expect = gen_merge(&model);
+    write_file(&merge_yaml(), &expect)?;
+    // 4) 立即读回校验,确认真的落盘(而非静默失败/被瞬间重置)
+    let landed = fs::read_to_string(merge_yaml()).map_err(|e| format!("写入后读回失败: {e}"))?;
+    if !landed.contains(MARKER) {
+        return Err("Merge.yaml 写入后未检测到 ProxyHub 标记——可能被其他程序即时覆盖,请关闭 Clash Verge 后重试。".into());
+    }
+    // 5) 正在运行时,规则需 Clash Verge「重新激活」才会并入运行配置——如实告知,不假装已生效
+    let tail = if clash_running() {
+        " · Clash Verge 运行中:需在其界面「重新激活/Reactivate」当前配置(或重启 Clash Verge)后规则才生效"
     } else {
         ""
     };
-    Ok(format!("已写回({} 条规则),备份: {}{}", model.rules.len(), backed, warn))
+    Ok(format!("已写回 {} 条规则,备份: {}{}", model.rules.len(), backed, tail))
+}
+
+/// 一键从 routing.json 重新下发 Merge.yaml(用于被 Clash Verge 重置后重新应用)。
+#[tauri::command]
+pub fn routing_reapply() -> Result<String, String> {
+    let json = fs::read_to_string(routing_json()).map_err(|e| format!("无 routing.json: {e}"))?;
+    routing_save(json)
 }
 
 #[tauri::command]
@@ -137,6 +208,177 @@ pub fn routing_rollback(name: String) -> Result<String, String> {
     let cur = fs::read_to_string(&src).map_err(|e| e.to_string())?;
     write_file(&merge_yaml(), &cur)?;
     Ok(format!("已回滚到 {name}"))
+}
+
+#[derive(Serialize)]
+pub struct RoutingStatus {
+    clash_running: bool,
+    merge_exists: bool,
+    merge_managed: bool,        // Merge.yaml 当前是否为 ProxyHub 下发(含标记)
+    subscription_present: bool, // 是否已导入订阅(否则策略组为空,规则无出口)
+    model_rules: usize,         // ProxyHub 规则数(权威)
+    runtime_rules: i64,         // mihomo 运行时规则数(-1=未知)
+    runtime_groups: Vec<String>, // mihomo 运行时真实策略组
+    notes: Vec<String>,         // 面向用户的如实提示
+}
+
+/// 分流真实状态:ProxyHub 规则 vs 磁盘 Merge vs mihomo 运行时,把"是否真生效"讲清楚。
+#[tauri::command]
+pub fn routing_status() -> Result<RoutingStatus, String> {
+    let running = clash_running();
+    let merge = fs::read_to_string(merge_yaml());
+    let merge_exists = merge.is_ok();
+    let merge_managed = merge.as_deref().map(|s| s.contains(MARKER)).unwrap_or(false);
+
+    // 订阅:profiles 目录下有非 Merge.yaml 的 .yaml 即视为已导入订阅
+    let mut subscription_present = false;
+    if let Ok(rd) = fs::read_dir(format!("{}/profiles", clash_app_dir())) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.ends_with(".yaml") && n != "Merge.yaml" {
+                subscription_present = true;
+            }
+        }
+    }
+
+    let model_rules = fs::read_to_string(routing_json())
+        .ok()
+        .and_then(|s| serde_json::from_str::<RoutingModel>(&s).ok())
+        .map(|m| m.rules.len())
+        .unwrap_or(0);
+
+    let mut runtime_rules = -1i64;
+    let mut runtime_groups = vec![];
+    if running {
+        if let Ok(j) = mihomo_get("/rules") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
+                if let Some(a) = v.get("rules").and_then(|x| x.as_array()) {
+                    runtime_rules = a.len() as i64;
+                }
+            }
+        }
+        if let Ok(j) = mihomo_get("/proxies") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
+                if let Some(m) = v.get("proxies").and_then(|x| x.as_object()) {
+                    for (k, val) in m {
+                        let is_group = val
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .map(|t| matches!(t, "Selector" | "URLTest" | "Fallback" | "LoadBalance" | "Relay"))
+                            .unwrap_or(false);
+                        if is_group {
+                            runtime_groups.push(k.clone());
+                        }
+                    }
+                }
+            }
+        }
+        runtime_groups.sort();
+    }
+
+    let mut notes = vec![];
+    if !subscription_present {
+        notes.push("未检测到订阅:策略组为空,去「🌍 国外流量」的规则当前无可用出口。请先在 Clash Verge 导入机场订阅。".into());
+    }
+    if running && merge_exists && !merge_managed {
+        notes.push("Merge.yaml 已被 Clash Verge 重置为默认,ProxyHub 规则当前未下发——点「重新下发」。".into());
+    }
+    if running && merge_managed && runtime_rules >= 0 && (runtime_rules as usize) < model_rules {
+        notes.push("规则已写入 Merge.yaml,但 mihomo 运行时规则数偏少——请在 Clash Verge 中「重新激活」配置使其并入。".into());
+    }
+    if !running {
+        notes.push("Clash Verge 未运行:规则不会生效,这里只做静态管理。".into());
+    }
+
+    Ok(RoutingStatus {
+        clash_running: running,
+        merge_exists,
+        merge_managed,
+        subscription_present,
+        model_rules,
+        runtime_rules,
+        runtime_groups,
+        notes,
+    })
+}
+
+#[derive(Serialize)]
+pub struct DiagHit {
+    rule_type: String,
+    value: String,
+    target: String,
+    certainty: String, // 命中 | 候选 | 兜底
+}
+
+#[derive(Serialize)]
+pub struct DiagResult {
+    host: String,
+    hits: Vec<DiagHit>,
+    conclusion: String,
+}
+
+/// 域名/IP 分流诊断:按规则顺序模拟,显式域名/IP 规则可确定命中,
+/// GEOSITE/GEOIP 这类按地理库判定的只标为"候选"(最终以 mihomo 为准)。
+#[tauri::command]
+pub fn routing_diagnose(host: String) -> Result<DiagResult, String> {
+    let host = host.trim().trim_start_matches("http://").trim_start_matches("https://");
+    let host = host.split('/').next().unwrap_or(host).to_lowercase();
+    if host.is_empty() {
+        return Err("请输入域名或 IP".into());
+    }
+    let is_ip = host.split('.').all(|p| p.parse::<u8>().is_ok()) && host.matches('.').count() == 3;
+
+    let model: RoutingModel = fs::read_to_string(routing_json())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    let mut hits = vec![];
+    let mut decided: Option<String> = None;
+
+    for r in &model.rules {
+        let ty = cat_to_type(&r.category);
+        match r.category.as_str() {
+            "domain" => {
+                let v = r.value.to_lowercase();
+                if host == v || host.ends_with(&format!(".{v}")) {
+                    hits.push(DiagHit { rule_type: ty.into(), value: r.value.clone(), target: r.target.clone(), certainty: "命中".into() });
+                    if decided.is_none() { decided = Some(r.target.clone()); }
+                }
+            }
+            "ipcidr" | "geoip" => {
+                if is_ip {
+                    // 真正的 CIDR/GEOIP 归属需运行时判定,这里只作候选
+                    hits.push(DiagHit { rule_type: ty.into(), value: r.value.clone(), target: r.target.clone(), certainty: "候选".into() });
+                }
+            }
+            "geosite" => {
+                if !is_ip {
+                    hits.push(DiagHit { rule_type: ty.into(), value: r.value.clone(), target: r.target.clone(), certainty: "候选".into() });
+                }
+            }
+            "app" | "port" => { /* 与单个域名无关 */ }
+            _ => {}
+        }
+    }
+
+    // 兜底(gen_merge 固定追加):中国站点直连
+    if !is_ip {
+        for (v, _t) in [("cn", "DIRECT"), ("apple-cn", "DIRECT")] {
+            hits.push(DiagHit { rule_type: "GEOSITE".into(), value: v.into(), target: "DIRECT".into(), certainty: "兜底".into() });
+        }
+    }
+    hits.push(DiagHit { rule_type: "GEOIP".into(), value: "CN".into(), target: "DIRECT".into(), certainty: "兜底".into() });
+
+    let conclusion = if let Some(t) = &decided {
+        format!("显式规则命中 → 走「{t}」。")
+    } else if hits.iter().any(|h| h.certainty == "候选") {
+        "无显式域名规则直接命中;最终取决于 GEOSITE/GEOIP 地理库归属(以上为按顺序的候选规则),由 mihomo 在运行时判定。".into()
+    } else {
+        "未命中任何上层规则,将落到兜底:国内站点直连,其余由订阅默认策略处理。".into()
+    };
+
+    Ok(DiagResult { host: host.to_string(), hits, conclusion })
 }
 
 /// 从现有 Merge.yaml 的 prepend-rules 解析出结构化模型。

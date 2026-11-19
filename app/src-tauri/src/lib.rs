@@ -30,6 +30,9 @@ pub fn run() {
             // 模块二 · 网络分流
             routing::routing_get,
             routing::routing_save,
+            routing::routing_reapply,
+            routing::routing_status,
+            routing::routing_diagnose,
             routing::routing_backups,
             routing::routing_rollback,
             routing::routing_import_clash,

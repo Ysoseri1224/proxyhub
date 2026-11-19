@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   routingGet,
   routingSave,
+  routingReapply,
+  routingStatus,
+  routingDiagnose,
   routingBackups,
   routingRollback,
   routingImportClash,
@@ -12,6 +15,8 @@ import {
   exitIpCheck,
   type Rule,
   type AppItem,
+  type RoutingStatus,
+  type DiagResult,
 } from "../api";
 import { getErrorMessage, tryParse } from "../util";
 
@@ -123,7 +128,18 @@ export function Routing() {
   const [ip, setIp] = useState<IpInfo | null>(null);
   const [ipLoading, setIpLoading] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [status, setStatus] = useState<RoutingStatus | null>(null);
+  const [diagHost, setDiagHost] = useState("");
+  const [diag, setDiag] = useState<DiagResult | null>(null);
   const [toast, setToast] = useState("");
+
+  async function refreshStatus(): Promise<void> {
+    try {
+      setStatus(await routingStatus());
+    } catch {
+      // 状态读取失败不致命:面板不显示即可
+    }
+  }
 
   async function load(): Promise<void> {
     try {
@@ -141,9 +157,27 @@ export function Routing() {
   }
   useEffect(() => {
     void load();
+    void refreshStatus();
     void clashGroups().then(setGroups).catch(() => undefined);
     // 注意:app 列表懒加载(展开「应用」分类时才扫),避免进页面就卡
   }, []);
+
+  async function reapply(): Promise<void> {
+    try {
+      setToast(await routingReapply());
+      await refreshStatus();
+    } catch (error: unknown) {
+      setToast(getErrorMessage(error));
+    }
+  }
+  async function runDiagnose(): Promise<void> {
+    if (!diagHost.trim()) return;
+    try {
+      setDiag(await routingDiagnose(diagHost.trim()));
+    } catch (error: unknown) {
+      setToast(getErrorMessage(error));
+    }
+  }
 
   function toggleCat(id: string): void {
     const opening = collapsed[id] !== false;
@@ -175,6 +209,7 @@ export function Routing() {
       setToast(msg);
       setDirty(false);
       await load();
+      await refreshStatus();
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
@@ -225,6 +260,80 @@ export function Routing() {
         <button className="primary" onClick={() => void save()} disabled={!dirty}>
           {dirty ? "保存并写回 ●" : "已保存"}
         </button>
+      </div>
+
+      {status && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div className="row">
+            <h3 style={{ margin: 0 }}>生效状态</h3>
+            <span className={`pill ${status.clash_running ? "ok" : "dim"}`}>
+              Clash {status.clash_running ? "运行中" : "未运行"}
+            </span>
+            <span className={`pill ${status.merge_managed ? "ok" : "err"}`}>
+              {status.merge_managed ? "规则已下发" : "规则未下发/被重置"}
+            </span>
+            <span className={`pill ${status.subscription_present ? "ok" : "err"}`}>
+              {status.subscription_present ? "已有订阅" : "无订阅"}
+            </span>
+            <span className="spacer" />
+            <span className="mono" style={{ opacity: 0.6 }}>
+              ProxyHub {status.model_rules} 条 / 运行时{" "}
+              {status.runtime_rules < 0 ? "?" : status.runtime_rules} 条
+            </span>
+            <button onClick={() => void reapply()}>重新下发</button>
+          </div>
+          {status.runtime_groups.length > 0 && (
+            <div className="row" style={{ gap: 6, marginTop: 10 }}>
+              <span className="toast" style={{ minHeight: 0 }}>运行时策略组:</span>
+              {status.runtime_groups.map((g) => (
+                <span key={g} className="pill dim">{g}</span>
+              ))}
+            </div>
+          )}
+          {status.notes.map((n, i) => (
+            <p key={i} className="toast" style={{ marginTop: 8, color: "var(--warn)" }}>⚠ {n}</p>
+          ))}
+        </div>
+      )}
+
+      <div className="card">
+        <div className="row">
+          <h3 style={{ margin: 0 }}>分流诊断</h3>
+          <span className="toast" style={{ minHeight: 0 }}>输入域名/IP,看它会撞到哪条规则</span>
+          <span className="spacer" />
+          <input
+            placeholder="如 chatgpt.com"
+            value={diagHost}
+            onChange={(e) => setDiagHost(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void runDiagnose()}
+            style={{ width: 200 }}
+          />
+          <button className="primary" onClick={() => void runDiagnose()}>诊断</button>
+        </div>
+        {diag && (
+          <div style={{ marginTop: 12 }}>
+            <table>
+              <thead>
+                <tr><th>规则类型</th><th>匹配值</th><th>去向</th><th>判定</th></tr>
+              </thead>
+              <tbody>
+                {diag.hits.map((h, i) => (
+                  <tr key={i}>
+                    <td className="mono">{h.rule_type}</td>
+                    <td className="mono">{h.value}</td>
+                    <td><span className="pill dim">{h.target}</span></td>
+                    <td>
+                      <span className={`pill ${h.certainty === "命中" ? "ok" : h.certainty === "兜底" ? "dim" : "err"}`}>
+                        {h.certainty}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="toast" style={{ marginTop: 10 }}>{diag.conclusion}</p>
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: 18 }}>
