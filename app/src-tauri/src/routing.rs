@@ -445,9 +445,19 @@ fn scan_apps_flat(dir: &str, out: &mut Vec<AppItem>) {
             continue;
         }
         let path = e.path();
-        // 进程名 = Contents/MacOS/ 里的主可执行文件名(mihomo PROCESS-NAME 匹配用)
+        // 进程名 = Info.plist 的 CFBundleExecutable(mihomo PROCESS-NAME 匹配的真实主进程名);
+        // 回退:Contents/MacOS 首个文件 → app 名。避免取到 Updater/helper 等旁支。
         let mut process = fname.trim_end_matches(".app").to_string();
-        if let Ok(macos) = fs::read_dir(path.join("Contents/MacOS")) {
+        let plist = path.join("Contents/Info.plist");
+        let exe = sh(
+            "plutil",
+            &["-extract", "CFBundleExecutable", "raw", "-o", "-", &plist.to_string_lossy()],
+        )
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+        if !exe.is_empty() {
+            process = exe;
+        } else if let Ok(macos) = fs::read_dir(path.join("Contents/MacOS")) {
             if let Some(f) = macos.flatten().next() {
                 process = f.file_name().to_string_lossy().to_string();
             }
