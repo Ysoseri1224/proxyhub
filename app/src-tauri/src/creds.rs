@@ -249,6 +249,110 @@ pub fn tool_logins() -> Result<Vec<ToolLogin>, String> {
     Ok(out)
 }
 
+/// 凭据详情富化:按 token 类型在线查出 归属账号 / 权限scope / 过期 / 有效性。
+#[tauri::command]
+pub fn cred_detail(name: String) -> Result<String, String> {
+    let value = cred_get(name.clone())?;
+    let mut ctype = "通用".to_string();
+    let (mut account, mut scopes, mut expiration, mut status) =
+        (String::new(), String::new(), String::new(), String::new());
+
+    if value.starts_with("ghp_") || value.starts_with("gho_") || value.starts_with("github_pat_") {
+        ctype = "GitHub Token".into();
+        if let Ok(out) = sh(
+            "curl",
+            &[
+                "-s",
+                "-i",
+                "-H",
+                &format!("Authorization: token {value}"),
+                "https://api.github.com/user",
+            ],
+        ) {
+            for line in out.lines() {
+                if line.to_lowercase().starts_with("x-oauth-scopes:") {
+                    scopes = line.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+                }
+            }
+            if let Some(idx) = out.find("\r\n\r\n").or_else(|| out.find("\n\n")) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(out[idx..].trim()) {
+                    account = v.get("login").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                }
+            }
+            status = if account.is_empty() { "无效/过期".into() } else { "有效".into() };
+        }
+    } else if value.starts_with("cfut_") || value.starts_with("cfat_") {
+        ctype = "Cloudflare Token".into();
+        if let Ok(out) = sh(
+            "curl",
+            &[
+                "-s",
+                "-H",
+                &format!("Authorization: Bearer {value}"),
+                "https://api.cloudflare.com/client/v4/user/tokens/verify",
+            ],
+        ) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&out) {
+                let ok = v.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+                let r = v.get("result").cloned().unwrap_or(serde_json::Value::Null);
+                status = r
+                    .get("status")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or(if ok { "active" } else { "无效" })
+                    .to_string();
+                expiration = r
+                    .get("expires_on")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("无")
+                    .to_string();
+            }
+        }
+    }
+    let detail = serde_json::json!({
+        "name": name, "value": value, "type": ctype,
+        "account": account, "scopes": scopes, "expiration": expiration, "status": status
+    });
+    serde_json::to_string(&detail).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct ChromeProfile {
+    pub name: String,
+    pub path: String,
+}
+
+/// 列出已配置的 Chrome 身份启动器(迁移时生成的 4 个身份 App)。
+#[tauri::command]
+pub fn chrome_profiles() -> Result<Vec<ChromeProfile>, String> {
+    let h = home();
+    let dirs = [
+        format!("{h}/Applications/Chrome 身份"),
+        format!("{h}/Applications/Chrome Profiles"),
+    ];
+    let mut out = vec![];
+    for d in dirs {
+        if let Ok(rd) = fs::read_dir(&d) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.ends_with(".app") {
+                    out.push(ChromeProfile {
+                        name: n.trim_end_matches(".app").to_string(),
+                        path: e.path().to_string_lossy().to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 启动某个 App(用于一键切到某 Chrome 身份)。
+#[tauri::command]
+pub fn launch_app(path: String) -> Result<String, String> {
+    sh("open", &[&path])?;
+    Ok("已启动".into())
+}
+
 /// 在系统终端里打开并运行某命令(用于交互式登录/切换,认证环节交给用户完成)。
 #[tauri::command]
 pub fn run_in_terminal(cmd: String) -> Result<String, String> {

@@ -39,6 +39,19 @@ export const importPasswordBook = () => invoke<string>("import_password_book");
 export type ToolLogin = { tool: string; logged_in: boolean; detail: string; login_cmd: string };
 export const toolLogins = () => invoke<ToolLogin[]>("tool_logins");
 export const runInTerminal = (cmd: string) => invoke<string>("run_in_terminal", { cmd });
+export type CredDetail = {
+  name: string;
+  value: string;
+  type: string;
+  account: string;
+  scopes: string;
+  expiration: string;
+  status: string;
+};
+export const credDetail = (name: string) => invoke<string>("cred_detail", { name });
+export type ChromeProfile = { name: string; path: string };
+export const chromeProfiles = () => invoke<ChromeProfile[]>("chrome_profiles");
+export const launchApp = (path: string) => invoke<string>("launch_app", { path });
 
 // 模块三.6 · Cloudflare / 邮箱
 export const cfVerify = () => invoke<string>("cf_verify");

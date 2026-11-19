@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   credList,
-  credGet,
+  credDetail,
   credSet,
   credDelete,
   ghAccounts,
@@ -9,19 +9,25 @@ import {
   toolLogins,
   runInTerminal,
   importPasswordBook,
+  chromeProfiles,
+  launchApp,
   type CredMeta,
+  type CredDetail,
   type GhAccount,
   type ToolLogin,
+  type ChromeProfile,
 } from "../api";
-import { getErrorMessage } from "../util";
+import { getErrorMessage, tryParse } from "../util";
 
-const CATEGORIES = ["github", "cloudflare", "aws", "npm", "pypi", "ai", "other"];
+const BASE_CATEGORIES = ["github", "cloudflare", "aws", "npm", "pypi", "ai", "other"];
 
 export function Creds() {
   const [tools, setTools] = useState<ToolLogin[]>([]);
   const [accounts, setAccounts] = useState<GhAccount[]>([]);
+  const [chromes, setChromes] = useState<ChromeProfile[]>([]);
   const [creds, setCreds] = useState<CredMeta[]>([]);
-  const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const [detail, setDetail] = useState<CredDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [switching, setSwitching] = useState("");
   const [draft, setDraft] = useState({ name: "", value: "", category: "github", note: "" });
   const [toast, setToast] = useState("");
@@ -30,6 +36,7 @@ export function Creds() {
     try {
       setTools(await toolLogins());
       setAccounts(await ghAccounts());
+      setChromes(await chromeProfiles());
       setCreds(await credList());
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
@@ -38,6 +45,12 @@ export function Creds() {
   useEffect(() => {
     void load();
   }, []);
+
+  const categories = useMemo(() => {
+    const s = new Set(BASE_CATEGORIES);
+    creds.forEach((c) => s.add(c.category));
+    return [...s];
+  }, [creds]);
 
   async function doSwitch(user: string): Promise<void> {
     setSwitching(user);
@@ -50,38 +63,24 @@ export function Creds() {
       setSwitching("");
     }
   }
-  async function login(cmd: string): Promise<void> {
+  async function openDetail(name: string): Promise<void> {
+    setDetailLoading(true);
+    setDetail(null);
     try {
-      await runInTerminal(cmd);
-      setToast(`已在终端打开:${cmd} — 登录完回来点刷新`);
+      setDetail(tryParse<CredDetail>(await credDetail(name)));
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
-    }
-  }
-  async function reveal(name: string): Promise<void> {
-    try {
-      const value = await credGet(name);
-      setRevealed((prev) => ({ ...prev, [name]: value }));
-    } catch (error: unknown) {
-      setToast(getErrorMessage(error));
+    } finally {
+      setDetailLoading(false);
     }
   }
   async function inject(name: string): Promise<void> {
     try {
-      const value = await credGet(name);
-      await navigator.clipboard.writeText(`export ${name}='${value}'`);
-      setToast(`已复制 export ${name}=… 到剪贴板`);
-    } catch (error: unknown) {
-      setToast(getErrorMessage(error));
-    }
-  }
-  async function edit(c: CredMeta): Promise<void> {
-    const value = window.prompt(`修改 ${c.name} 的值(留空取消)`);
-    if (!value) return;
-    try {
-      await credSet(c.name, value, c.category, c.note);
-      setToast(`已更新 ${c.name}`);
-      await load();
+      const d = tryParse<CredDetail>(await credDetail(name));
+      if (d) {
+        await navigator.clipboard.writeText(`export ${name}='${d.value}'`);
+        setToast(`已复制 export ${name}=… 到剪贴板`);
+      }
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
     }
@@ -89,7 +88,7 @@ export function Creds() {
   async function add(): Promise<void> {
     if (!draft.name.trim() || !draft.value.trim()) return;
     try {
-      await credSet(draft.name.trim(), draft.value, draft.category, draft.note);
+      await credSet(draft.name.trim(), draft.value, draft.category.trim() || "other", draft.note);
       setDraft({ name: "", value: "", category: draft.category, note: "" });
       setToast("已存入 Keychain");
       await load();
@@ -113,13 +112,21 @@ export function Creds() {
       setToast(getErrorMessage(error));
     }
   }
+  async function login(cmd: string): Promise<void> {
+    try {
+      await runInTerminal(cmd);
+      setToast(`已在终端打开:${cmd} — 登录完点刷新`);
+    } catch (error: unknown) {
+      setToast(getErrorMessage(error));
+    }
+  }
 
   return (
     <div>
       <div className="row">
         <div>
           <h1 className="page-title">凭据账号</h1>
-          <p className="page-sub" style={{ margin: 0 }}>各工具登录态 + Keychain 加密凭据库 · 仓库零明文</p>
+          <p className="page-sub" style={{ margin: 0 }}>登录态切换 + Keychain 加密凭据库 · ProxyHub 即权威,仓库零明文</p>
         </div>
         <span className="spacer" />
         <button onClick={() => void load()}>刷新</button>
@@ -138,7 +145,7 @@ export function Creds() {
       </div>
 
       <div className="card">
-        <h3>GitHub 多账号(终端当前账号)</h3>
+        <h3>GitHub 身份(终端当前账号)</h3>
         {accounts.map((a) => (
           <div key={a.user} className="row" style={{ padding: "6px 10px", marginBottom: 5, borderRadius: 8,
             background: a.active ? "var(--sel)" : "transparent", border: "0.5px solid var(--border)" }}>
@@ -155,6 +162,17 @@ export function Creds() {
         {accounts.length === 0 && <p className="toast">未检测到 gh 登录账号。</p>}
       </div>
 
+      {chromes.length > 0 && (
+        <div className="card">
+          <h3>Chrome 身份</h3>
+          <div className="row">
+            {chromes.map((c) => (
+              <button key={c.path} onClick={() => void launchApp(c.path).then(setToast)}>{c.name}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <div className="row">
           <h3 style={{ margin: 0 }}>凭据库({creds.length})</h3>
@@ -162,36 +180,62 @@ export function Creds() {
           <button onClick={() => void doImport()}>一键导入密码本</button>
         </div>
         <div className="row" style={{ marginTop: 10 }}>
-          <input placeholder="名称" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} style={{ width: 180 }} />
-          <select value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
-            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <input placeholder="值" type="password" value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })} style={{ flex: 1, minWidth: 140 }} />
-          <input placeholder="备注" value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} style={{ width: 100 }} />
+          <input placeholder="名称" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} style={{ width: 170 }} />
+          <input list="cats" placeholder="分类(可新建)" value={draft.category}
+            onChange={(e) => setDraft({ ...draft, category: e.target.value })} style={{ width: 120 }} />
+          <datalist id="cats">{categories.map((c) => <option key={c} value={c} />)}</datalist>
+          <input placeholder="值" type="password" value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })} style={{ flex: 1, minWidth: 130 }} />
+          <input placeholder="备注" value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} style={{ width: 90 }} />
           <button className="primary" onClick={() => void add()}>存入</button>
         </div>
         <table style={{ marginTop: 12 }}>
-          <thead><tr><th>名称</th><th>分类</th><th>备注</th><th>值</th><th>管理</th></tr></thead>
+          <thead><tr><th>名称</th><th>分类</th><th>备注</th><th>管理</th></tr></thead>
           <tbody>
             {creds.map((c) => (
               <tr key={c.name}>
-                <td style={{ fontWeight: 600 }}>{c.name}</td>
-                <td><span className="pill dim">{c.category}</span></td>
-                <td style={{ opacity: 0.6, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis" }}>{c.note}</td>
-                <td className="mono" style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {revealed[c.name] ?? <button onClick={() => void reveal(c.name)}>显示</button>}
+                <td style={{ fontWeight: 600, cursor: "default" }} onClick={() => void openDetail(c.name)}>
+                  <span style={{ textDecoration: "underline dotted" }}>{c.name}</span>
                 </td>
+                <td><span className="pill dim">{c.category}</span></td>
+                <td style={{ opacity: 0.6, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{c.note}</td>
                 <td style={{ whiteSpace: "nowrap" }}>
+                  <button onClick={() => void openDetail(c.name)}>详情</button>{" "}
                   <button onClick={() => void inject(c.name)}>注入</button>{" "}
-                  <button onClick={() => void edit(c)}>改</button>{" "}
                   <button className="danger" onClick={() => void remove(c.name)}>删</button>
                 </td>
               </tr>
             ))}
-            {creds.length === 0 && <tr><td colSpan={5} className="toast">还没有凭据,点「一键导入密码本」。</td></tr>}
+            {creds.length === 0 && <tr><td colSpan={4} className="toast">还没有凭据,点「一键导入密码本」。</td></tr>}
           </tbody>
         </table>
       </div>
+
+      {(detail || detailLoading) && (
+        <div className="modal-backdrop" onClick={() => setDetail(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            {detailLoading && <p>在线查询中…</p>}
+            {detail && (
+              <>
+                <div className="row">
+                  <h3 style={{ margin: 0 }}>{detail.name}</h3>
+                  <span className="pill dim">{detail.type}</span>
+                  <span className="spacer" />
+                  <button onClick={() => setDetail(null)}>关闭</button>
+                </div>
+                <table style={{ marginTop: 12 }}>
+                  <tbody>
+                    <tr><td style={{ color: "var(--text-dim)" }}>归属账号</td><td className="mono">{detail.account || "—"}</td></tr>
+                    <tr><td style={{ color: "var(--text-dim)" }}>有效性</td><td><span className={`pill ${detail.status.includes("有效") || detail.status === "active" ? "ok" : "err"}`}>{detail.status || "—"}</span></td></tr>
+                    <tr><td style={{ color: "var(--text-dim)" }}>过期</td><td className="mono">{detail.expiration || "—"}</td></tr>
+                    <tr><td style={{ color: "var(--text-dim)" }}>权限 scope</td><td className="mono" style={{ wordBreak: "break-all" }}>{detail.scopes || "—"}</td></tr>
+                    <tr><td style={{ color: "var(--text-dim)" }}>值</td><td className="mono" style={{ wordBreak: "break-all" }}>{detail.value}</td></tr>
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="toast">{toast}</div>
     </div>

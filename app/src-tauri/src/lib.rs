@@ -45,6 +45,9 @@ pub fn run() {
             creds::import_password_book,
             creds::tool_logins,
             creds::run_in_terminal,
+            creds::cred_detail,
+            creds::chrome_profiles,
+            creds::launch_app,
             // 模块三.6 · Cloudflare / 邮箱
             cloudflare::cf_verify,
             cloudflare::cf_zones,
