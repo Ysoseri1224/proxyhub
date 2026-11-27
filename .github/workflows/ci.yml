@@ -13,7 +13,7 @@ concurrency:
 jobs:
   check:
     name: Check
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +55,7 @@ jobs:
   bundle:
     name: Bundle
     needs: check
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
