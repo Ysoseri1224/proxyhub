@@ -22,13 +22,48 @@ ProxyHub is a personal project for developers who move between network environme
 
 ## Features
 
-| Module | What it does |
-|:--|:--|
-| 📦 **Mirrors** | A local mirror engine for eight ecosystems: pip, npm, cargo, go, brew, docker, conda and CRAN. Each keeps a pool of upstreams ranked by health checks with automatic failover, and package files are cached on disk. Point every tool at the engine or back to the official source in one click, and add or remove mirrors and ecosystems from the UI. |
-| 🧭 **Routing** | Assign destinations by app (process), domain, service set, IP range, region or port, using the policy groups from your subscription. Import rules from Clash and pull domains from browser bookmarks. Rules are written to the Clash Verge Merge profile with a backup before and a read-back check after, and can be rolled back in one click. A diagnoser shows which rule a given domain hits. |
-| 🛰️ **Node check** | Measures each node's entry and exit IP, ASN, region, latency and loss, then compares them with what the node name advertises (exit region, direct/relay/dedicated line, residential/native IP, cloud vendor) and reports *consistent*, *mismatch* or *not independently verified*. Also rates exit IP purity and regional availability of ChatGPT, Claude and Gemini, traces the route to the entry, and samples during evening peak hours on a schedule. |
-| 🔐 **Credentials** | Credentials are stored in the macOS Keychain and can be imported, viewed, injected and edited; tokens are looked up online for owner, scopes and expiry. Switch between GitHub accounts silently, launch Chrome profiles in one click, and see every dev tool's login state on one page. |
-| ☁️ **Cloudflare** | Zone list, console shortcuts, and management of Email Routing rules and destination addresses. |
+### 📦 Mirrors
+
+A local package-download proxy. Tools such as pip, npm and go use it as their package source, and it picks the fastest working mirror from a pool of domestic and overseas upstreams. It keeps dependency installs fast and reliable as your network environment changes.
+
+- Covers eight ecosystems: pip, npm, cargo, go, brew, docker, conda and CRAN
+- Ranks upstreams by health checks and fails over to the next one automatically; package files are cached on disk
+- Points every tool at the engine or back to the official source in one click; mirrors and ecosystems are editable in the UI
+- Live diagnostics show which upstream served each download and whether it came from cache
+
+### 🧭 Routing
+
+A visual editor for Clash Verge routing rules. It decides which apps and sites go through the proxy, through which node group, and which connect directly, so domestic services stay direct while overseas services go through a stable proxy.
+
+- Assign destinations by app (process), domain, service set, IP range, region or port, using the policy groups from your subscription
+- Import existing rules from Clash and pull domains from browser bookmarks
+- Rules are written to the Clash Verge Merge profile with a backup before and a read-back check after, and can be rolled back in one click
+- Diagnoser: enter a domain to see the rule it hits and where it goes
+
+### 🛰️ Node check
+
+A health check for proxy subscriptions. The region, line type and IP type in a node's name are what the provider advertises; this module measures every node to show which ones live up to their names and which suit IP-sensitive services such as ChatGPT.
+
+- Measures entry and exit IP, ASN, region, latency and loss
+- Compares the results with the node name's claims and reports *consistent*, *mismatch* or *not independently verified*, with the evidence
+- Rates exit IP purity (datacenter, residential, flagged as proxy) and regional availability of ChatGPT, Claude and Gemini
+- Traces the route to the entry; samples during evening peak hours on a schedule to compare against off-peak
+
+### 🔐 Credentials
+
+A vault and switcher for developer credentials and login state. Tokens and passwords scattered across text files, environment variables and tool configs are gathered into the macOS Keychain, ready to view, use and switch.
+
+- Import, view, inject into the terminal and edit credentials
+- Look up a token's owner, scopes and expiry online
+- Switch between GitHub accounts silently; launch Chrome profiles in one click
+- See the login state of gh, npm, docker, wrangler and other tools on one page
+
+### ☁️ Cloudflare
+
+A lightweight console for your own domains, covering everyday tasks, mainly email forwarding on the domain, without opening the web dashboard.
+
+- Zone list and shortcuts to dashboard pages
+- Management of Email Routing rules and destination addresses
 
 ## Quick start
 
