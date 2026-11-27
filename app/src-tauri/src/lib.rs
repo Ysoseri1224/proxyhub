@@ -4,6 +4,16 @@ mod common;
 mod creds;
 mod mirror;
 mod routing;
+mod verify;
+
+pub fn headless_report(uid: Option<String>) {
+    verify::headless_report(uid);
+}
+
+/// launchd 定时采样的无界面入口
+pub fn headless_sample() {
+    verify::headless_sample();
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -43,7 +53,6 @@ pub fn run() {
             routing::import_bookmarks,
             routing::clash_groups,
             routing::launch_clash,
-            routing::exit_ip_check,
             // 模块三 · 凭据与账号
             creds::cred_list,
             creds::cred_get,
@@ -65,6 +74,17 @@ pub fn run() {
             cloudflare::cf_email_add,
             cloudflare::cf_email_delete,
             cloudflare::cf_open_console,
+            // 模块五 · 节点核验
+            verify::verify_profiles,
+            verify::verify_run,
+            verify::verify_progress,
+            verify::verify_latest,
+            verify::verify_current_exit,
+            verify::verify_trace,
+            verify::verify_sample_now,
+            verify::verify_schedule_get,
+            verify::verify_schedule_set,
+            verify::verify_peak_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

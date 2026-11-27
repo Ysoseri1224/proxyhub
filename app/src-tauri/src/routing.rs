@@ -71,7 +71,7 @@ fn mihomo_tcp() -> Option<String> {
 }
 
 /// 向 mihomo 控制接口发 GET(优先 unix socket,其次 TCP)。
-fn mihomo_get(path: &str) -> Result<String, String> {
+pub(crate) fn mihomo_get(path: &str) -> Result<String, String> {
     if let Some(sock) = mihomo_sock() {
         return sh(
             "curl",
@@ -670,18 +670,4 @@ fn parse_group_names(content: &str, out: &mut Vec<String>) {
 pub fn launch_clash() -> Result<String, String> {
     sh("open", &["-a", "Clash Verge"])?;
     Ok("已唤起 Clash Verge".into())
-}
-
-/// 出口 IP 纯净度检测:地区 + 是否被识别为代理/机房 IP。
-#[tauri::command]
-pub fn exit_ip_check() -> Result<String, String> {
-    sh(
-        "curl",
-        &[
-            "-s",
-            "--max-time",
-            "8",
-            "http://ip-api.com/json/?fields=query,country,city,isp,org,as,proxy,hosting,mobile",
-        ],
-    )
 }

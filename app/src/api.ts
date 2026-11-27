@@ -48,7 +48,6 @@ export const listApps = () => invoke<AppItem[]>("list_apps");
 export const importBookmarks = () => invoke<string[]>("import_bookmarks");
 export const clashGroups = () => invoke<string[]>("clash_groups");
 export const launchClash = () => invoke<string>("launch_clash");
-export const exitIpCheck = () => invoke<string>("exit_ip_check");
 
 // 模块三 · 凭据与账号
 export type CredMeta = { name: string; category: string; note: string };
@@ -89,3 +88,44 @@ export const cfEmailAdd = (zoneId: string, alias: string, dest: string) =>
 export const cfEmailDelete = (zoneId: string, ruleId: string) =>
   invoke<string>("cf_email_delete", { zoneId, ruleId });
 export const cfOpenConsole = (section: string) => invoke<string>("cf_open_console", { section });
+
+// 模块五 · 节点核验
+export type VProfile = { uid: string; name: string; current: boolean; nodes: number };
+export type IpIntel = {
+  ip: string; cc: string; country: string; city: string; isp: string; org: string;
+  asn: number; as_name: string; rdns: string; hosting: boolean; proxy: boolean; mobile: boolean;
+  datacenter: boolean; dc_reason: string;
+};
+export type VCheck = { item: string; claim: string; observed: string; result: "pass" | "fail" | "unverified"; note: string };
+export type AiAccess = { service: string; ok: boolean; basis: string };
+export type Purity = { level: "clean" | "warn" | "risky" | "unknown"; label: string; reasons: string[] };
+export type Verdict = "consistent" | "mismatch" | "unverified" | "unreachable";
+export type NodeResult = {
+  name: string; ptype: string; server: string; port: number;
+  entry_ip: string; dns_source: string; entry: IpIntel | null; entry_tcp_ms: number[];
+  reachable: boolean; error: string; exit: IpIntel | null; ai_loc: string;
+  http_ms: number[]; http_fail: number; http_tries: number;
+  claims: string[]; checks: VCheck[]; verdict: Verdict; missing: string[]; purity: Purity; ai: AiAccess[]; shared_exit_with: string[];
+};
+export type VReport = {
+  at: number; profile: string; profile_name: string; local_isp: string; local_ip: string;
+  skipped_info: string[]; notes: string[]; nodes: NodeResult[];
+};
+export type VProgress = { running: boolean; stage: string; done: number; total: number };
+export type ExitView = { label: string; ip: IpIntel | null; ai_loc: string; purity: Purity | null; ai: AiAccess[]; note: string };
+export type Hop = { n: number; ip: string; ms: number | null; cc: string; asn: number; org: string; private: boolean };
+export type VSchedule = { installed: boolean; loaded: boolean; slots: string[]; binary: string; samples: number };
+export type PeakStat = {
+  node: string; off_n: number; off_ms: number | null; off_loss: number | null;
+  peak_n: number; peak_ms: number | null; peak_loss: number | null; local_isp: string;
+};
+export const verifyProfiles = () => invoke<VProfile[]>("verify_profiles");
+export const verifyRun = (profile: string) => invoke<VReport>("verify_run", { profile });
+export const verifyProgress = () => invoke<VProgress>("verify_progress");
+export const verifyLatest = () => invoke<VReport | null>("verify_latest");
+export const verifyCurrentExit = () => invoke<ExitView[]>("verify_current_exit");
+export const verifyTrace = (ip: string) => invoke<Hop[]>("verify_trace", { ip });
+export const verifySampleNow = () => invoke<string>("verify_sample_now");
+export const verifyScheduleGet = () => invoke<VSchedule>("verify_schedule_get");
+export const verifyScheduleSet = (enable: boolean) => invoke<VSchedule>("verify_schedule_set", { enable });
+export const verifyPeakStats = () => invoke<PeakStat[]>("verify_peak_stats");

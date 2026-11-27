@@ -12,7 +12,6 @@ import {
   importBookmarks,
   clashGroups,
   launchClash,
-  exitIpCheck,
   type Rule,
   type AppItem,
   type RoutingStatus,
@@ -35,15 +34,6 @@ const CATS: CatDef[] = [
   { id: "port", label: "端口", hint: "如 443" },
 ];
 
-interface IpInfo {
-  query?: string;
-  country?: string;
-  city?: string;
-  isp?: string;
-  org?: string;
-  proxy?: boolean;
-  hosting?: boolean;
-}
 
 interface SectionProps {
   cat: CatDef;
@@ -125,8 +115,6 @@ export function Routing() {
   const [bmFilter, setBmFilter] = useState("");
   const [backups, setBackups] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [ip, setIp] = useState<IpInfo | null>(null);
-  const [ipLoading, setIpLoading] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<RoutingStatus | null>(null);
   const [diagHost, setDiagHost] = useState("");
@@ -232,17 +220,6 @@ export function Routing() {
       setToast(d.length ? `从浏览器书签提取 ${d.length} 个域名,点下方域名即可加为规则` : "未读到书签(Chrome/Edge/Brave/Safari)");
     } catch (error: unknown) {
       setToast(getErrorMessage(error));
-    }
-  }
-  async function checkIp(): Promise<void> {
-    setIpLoading(true);
-    setIp(null);
-    try {
-      setIp(tryParse<IpInfo>(await exitIpCheck()));
-    } catch (error: unknown) {
-      setToast(getErrorMessage(error));
-    } finally {
-      setIpLoading(false);
     }
   }
 
@@ -374,35 +351,6 @@ export function Routing() {
           </div>
         </div>
       )}
-
-      <div className="card">
-        <div className="row">
-          <h3 style={{ margin: 0 }}>出口 IP 纯净度</h3>
-          <span className="spacer" />
-          <button className="primary" onClick={() => void checkIp()} disabled={ipLoading}>
-            {ipLoading ? "检测中…" : "检测当前出口"}
-          </button>
-        </div>
-        {ipLoading && <div className="bar" style={{ marginTop: 12 }}><div style={{ width: "40%" }} /></div>}
-        {ip && !ipLoading && (
-          <div style={{ marginTop: 12 }}>
-            <div className="row" style={{ gap: 16, fontSize: 15 }}>
-              <strong className="mono">{ip.query}</strong>
-              <span>{ip.country} · {ip.city}</span>
-            </div>
-            <div className="row" style={{ gap: 10, marginTop: 10 }}>
-              <span className="pill dim">{ip.isp || ip.org}</span>
-              <span className={`pill ${ip.proxy ? "err" : "ok"}`}>{ip.proxy ? "⚠ 被标记为代理 IP" : "✓ 非代理 IP"}</span>
-              <span className={`pill ${ip.hosting ? "err" : "ok"}`}>{ip.hosting ? "⚠ 机房 IP(易被风控)" : "✓ 非机房 IP"}</span>
-            </div>
-            <p className="toast" style={{ marginTop: 10 }}>
-              {ip.proxy || ip.hosting
-                ? "此出口可能触发 GPT/Google 的验证码或风控。换一个住宅/原生 IP 的节点更稳。"
-                : "此出口较干净,适合登录 GPT/Google 等对 IP 敏感的服务。"}
-            </p>
-          </div>
-        )}
-      </div>
 
       <div className="card">
         <h3>配置备份 / 回滚</h3>

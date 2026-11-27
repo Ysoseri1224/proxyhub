@@ -4,8 +4,9 @@ import { Mirror } from "./modules/Mirror";
 import { Routing } from "./modules/Routing";
 import { Creds } from "./modules/Creds";
 import { Cloudflare } from "./modules/Cloudflare";
+import { Verify } from "./modules/Verify";
 
-type Tab = "mirror" | "routing" | "creds" | "cloudflare";
+type Tab = "mirror" | "routing" | "verify" | "creds" | "cloudflare";
 
 interface NavDef {
   id: Tab;
@@ -16,6 +17,7 @@ interface NavDef {
 const NAV: NavDef[] = [
   { id: "mirror", ico: "📦", label: "镜像源" },
   { id: "routing", ico: "🧭", label: "网络分流" },
+  { id: "verify", ico: "🛰️", label: "节点核验" },
   { id: "creds", ico: "🔐", label: "凭据账号" },
   { id: "cloudflare", ico: "☁️", label: "Cloudflare" },
 ];
@@ -41,6 +43,7 @@ function App() {
       <main className="content">
         {tab === "mirror" && <Mirror />}
         {tab === "routing" && <Routing />}
+        {tab === "verify" && <Verify />}
         {tab === "creds" && <Creds />}
         {tab === "cloudflare" && <Cloudflare />}
       </main>
