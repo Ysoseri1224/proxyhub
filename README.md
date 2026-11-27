@@ -107,3 +107,7 @@ go env -w GOPROXY=http://127.0.0.1:8899/go/
 
 - [SPEC.md](SPEC.md) · 功能规格
 - [DESIGN.md](DESIGN.md) · 设计说明
+
+## 许可
+
+[MIT](LICENSE)

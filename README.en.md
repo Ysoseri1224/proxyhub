@@ -107,3 +107,7 @@ Control endpoints: `/_ph/status` for upstream health and cache usage, `/_ph/diag
 
 - [SPEC.md](SPEC.md) · functional spec
 - [DESIGN.md](DESIGN.md) · design notes
+
+## License
+
+[MIT](LICENSE)
