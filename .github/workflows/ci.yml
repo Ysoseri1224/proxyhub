@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.mod
+
+      - name: Engine · vet & build
+        working-directory: engine
+        run: |
+          go vet ./...
+          go build -o ../app/src-tauri/resources/proxyhub-engine .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Frontend · type-check & build
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Backend · clippy
+        working-directory: app/src-tauri
+        run: cargo clippy --locked -- -D clippy::correctness -D clippy::suspicious
+
+  bundle:
+    name: Bundle
+    needs: check
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.mod
+
+      - name: Build engine
+        working-directory: engine
+        run: go build -trimpath -ldflags "-s -w" -o ../app/src-tauri/resources/proxyhub-engine .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Build app bundle
+        working-directory: app
+        run: |
+          npm ci
+          npm run tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProxyHub-${{ github.sha }}
+          path: app/src-tauri/target/release/bundle/dmg/*.dmg
+          retention-days: 14

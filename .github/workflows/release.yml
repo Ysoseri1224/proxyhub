@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches app version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(jq -r .version app/src-tauri/tauri.conf.json)
+          echo "tag=$tag app=$ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::Tag v$tag differs from tauri.conf.json version $ver"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.mod
+
+      - name: Build engine
+        working-directory: engine
+        run: go build -trimpath -ldflags "-s -w" -o ../app/src-tauri/resources/proxyhub-engine .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Build app bundle
+        working-directory: app
+        run: |
+          npm ci
+          npm run tauri build
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dmg=$(ls app/src-tauri/target/release/bundle/dmg/*.dmg)
+          shasum -a 256 "$dmg" | sed 's#  .*/#  #' > "$dmg.sha256"
+          gh release create "$GITHUB_REF_NAME" "$dmg" "$dmg.sha256" \
+            --title "ProxyHub $GITHUB_REF_NAME" --generate-notes
