@@ -178,7 +178,7 @@ fn ystr(v: &Yaml, k: &str) -> String {
 
 /// 信息类"节点"(剩余流量、到期时间、官网地址)不是真实线路,核验时跳过并单独列出。
 fn is_info_node(name: &str, server: &str) -> bool {
-    const KW: [&str; 9] = ["剩余", "流量:", "流量：", "到期", "过期", "官网", "套餐", "重置", "公告"];
+    const KW: [&str; 14] = ["剩余", "流量:", "流量：", "到期", "过期", "官网", "套餐", "重置", "公告", "TG群", "TG频道", "群组", "客服", "频道"];
     KW.iter().any(|k| name.contains(k)) || server.is_empty() || server == "127.0.0.1" || server.starts_with("ntp.")
 }
 
@@ -464,7 +464,7 @@ const DC_WORDS: &[&str] = &[
     "cloud", "hosting", "datacenter", "data center", "server", "vps", "colo", "compute", "dedicated",
     "amazon", "aws", "google", "microsoft", "azure", "oracle", "alibaba", "aliyun", "tencent", "digitalocean",
     "vultr", "choopa", "linode", "akamai", "ovh", "hetzner", "m247", "leaseweb", "contabo", "zenlayer",
-    "dmit", "cogent", "gcore", "g-core", "datacamp", "kirino", "bandwagon", "it7", "racknerd", "colocrossing",
+    "dmit", "cogent", "light node", "lightnode", "kaopu", "akile", "isif", "gcore", "g-core", "datacamp", "kirino", "bandwagon", "it7", "racknerd", "colocrossing",
 ];
 
 static LOOKUP_NOTES: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -598,11 +598,26 @@ const REGIONS: &[(&str, &str)] = &[
     ("荷兰", "NL"), ("土耳其", "TR"), ("越南", "VN"), ("菲律宾", "PH"), ("阿根廷", "AR"), ("巴西", "BR"),
     ("新西兰", "NZ"), ("意大利", "IT"), ("西班牙", "ES"), ("瑞士", "CH"), ("瑞典", "SE"), ("爱尔兰", "IE"),
     ("波兰", "PL"), ("乌克兰", "UA"), ("以色列", "IL"), ("阿联酋", "AE"), ("迪拜", "AE"), ("南非", "ZA"),
-    ("墨西哥", "MX"), ("智利", "CL"), ("尼日利亚", "NG"), ("埃及", "EG"), ("哈萨克", "KZ"), ("芬兰", "FI"),
+    ("墨西哥", "MX"), ("悉尼", "AU"), ("墨尔本", "AU"), ("东京", "JP"), ("大阪", "JP"), ("首尔", "KR"), ("春川", "KR"), ("洛杉矶", "US"), ("圣何塞", "US"), ("硅谷", "US"), ("伦敦", "GB"), ("法兰克福", "DE"), ("巴黎", "FR"), ("雅典", "GR"), ("希腊", "GR"), ("智利", "CL"), ("尼日利亚", "NG"), ("埃及", "EG"), ("哈萨克", "KZ"), ("芬兰", "FI"),
 ];
 
-fn region_claim(name: &str) -> Option<(&'static str, &'static str)> {
-    REGIONS.iter().find(|(zh, _)| name.contains(zh)).copied()
+/// 节点名的地区宣传:国旗 emoji 与中文地名都解析;两者矛盾时如实返回两个,由判定逐一核对。
+fn region_claims(name: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let chars: Vec<char> = name.chars().collect();
+    for w in chars.windows(2) {
+        let ri = |c: char| (0x1F1E6..=0x1F1FF).contains(&(c as u32)).then(|| char::from(b'A' + (c as u32 - 0x1F1E6) as u8));
+        if let (Some(a), Some(b)) = (ri(w[0]), ri(w[1])) {
+            out.push((format!("国旗 {a}{b}"), format!("{a}{b}")));
+            break;
+        }
+    }
+    if let Some((zh, cc)) = REGIONS.iter().find(|(zh, _)| name.contains(zh)) {
+        if !out.iter().any(|(_, c)| c == cc) {
+            out.push(((*zh).to_string(), (*cc).to_string()));
+        }
+    }
+    out
 }
 
 fn has_any(name: &str, kws: &[&str]) -> bool {
@@ -663,15 +678,15 @@ fn judge(n: &mut NodeResult, peak_samples: usize) {
     let mut claims = Vec::new();
     let mut missing = Vec::new();
 
-    // 地区
-    if let Some((zh, cc)) = region_claim(&name) {
-        claims.push(format!("落地 {zh}"));
+    // 地区(国旗与地名都核对;互相矛盾时两条都列出,必有一条不符)
+    for (label, cc) in region_claims(&name) {
+        claims.push(format!("落地 {label}"));
         let (result, observed) = match &exit {
             Some(x) if x.cc == cc => ("pass", format!("出口 {} 归属 {}", x.ip, x.cc)),
-            Some(x) => ("fail", format!("出口 {} 归属 {}({}),与宣传不符", x.ip, x.cc, x.country)),
+            Some(x) => ("fail", format!("出口 {} 归属 {}({}),与宣传 {cc} 不符", x.ip, x.cc, x.country)),
             None => ("unverified", "没拿到出口 IP".into()),
         };
-        checks.push(Check { item: "落地地区".into(), claim: zh.into(), observed, result: result.into(), note: "按出口 IP 的公开归属库判断".into() });
+        checks.push(Check { item: "落地地区".into(), claim: format!("{label}({cc})"), observed, result: result.into(), note: "按出口 IP 的公开归属库判断".into() });
     }
 
     // 线路类型
@@ -757,7 +772,7 @@ fn judge(n: &mut NodeResult, peak_samples: usize) {
         checks.push(Check { item: "机房厂商".into(), claim, observed, result: result.into(), note: String::new() });
         break;
     }
-    for (kw, isp) in [("移动", "移动"), ("联通", "联通"), ("电信", "电信"), ("CMI", "移动"), ("CN2", "电信"), ("9929", "联通")] {
+    for (kw, isp) in [("移联", "移动/联通"), ("移动", "移动"), ("联通", "联通"), ("电信", "电信"), ("CMI", "移动"), ("CN2", "电信"), ("9929", "联通")] {
         if has_any(&name, &[kw]) {
             claims.push(format!("面向{isp}优化"));
             checks.push(Check {
@@ -887,7 +902,7 @@ fn run_verify(uid: &str) -> Result<Report, String> {
     ips.dedup();
     let intel = enrich(&ips);
     let (local_ip, local_isp) = local_info();
-    let peak = peak_counts();
+    let peak = peak_counts(&pname);
 
     let mut out = Vec::new();
     for ((n, (eip, src)), p) in nodes.iter().zip(&entries).zip(probes) {
@@ -1081,6 +1096,8 @@ pub async fn verify_trace(ip: String) -> Result<Vec<Hop>, String> {
 
 #[derive(Serialize, Deserialize)]
 struct Sample {
+    #[serde(default)]
+    profile: String,
     at: u64,
     hour: u32,
     peak: bool,
@@ -1107,9 +1124,9 @@ fn read_samples() -> Vec<Sample> {
         .collect()
 }
 
-fn peak_counts() -> HashMap<String, usize> {
+fn peak_counts(profile: &str) -> HashMap<String, usize> {
     let mut m = HashMap::new();
-    for s in read_samples().into_iter().filter(|s| s.peak) {
+    for s in read_samples().into_iter().filter(|s| s.peak && s.profile == profile) {
         *m.entry(s.node).or_insert(0) += 1;
     }
     m
@@ -1120,29 +1137,51 @@ fn saved_profile() -> Option<String> {
     serde_json::from_str::<serde_json::Value>(&t).ok()?["profile"].as_str().map(String::from)
 }
 
+/// 晚高峰采样:对 Clash Verge 里所有节点订阅各测一轮,便于横向对比。
 fn sample_once() -> Result<usize, String> {
-    let uid = match saved_profile() {
-        Some(u) => u,
-        None => ystr(&load_profiles_yaml()?, "current"),
-    };
-    let (nodes, _, _) = load_nodes(&uid)?;
-    let entries: Vec<(String, String)> = nodes.iter().map(|n| resolve_entry(&n.server, n.port)).collect();
-    let (core, ports) = start_core(&nodes)?;
-    let probes = probe_all(&nodes, &ports, &entries, 5);
-    drop(core);
+    let profiles = verify_profiles()?;
     let (_, local_isp) = local_info();
     let hour = local_hour();
-    let peak = (20..22).contains(&hour) || (hour == 22 && sh("date", &["+%M"]).map(|m| m.trim() == "00").unwrap_or(false));
+    let minute: u32 = sh("date", &["+%M"]).ok().and_then(|m| m.trim().parse().ok()).unwrap_or(0);
+    let peak = (20..22).contains(&hour) || (hour == 22 && minute == 0);
     let cutoff = now().saturating_sub(14 * 86400);
     let mut keep: Vec<String> = read_samples().into_iter().filter(|s| s.at >= cutoff).filter_map(|s| serde_json::to_string(&s).ok()).collect();
-    for (n, p) in nodes.iter().zip(probes) {
-        let s = Sample { at: now(), hour, peak, local_isp: local_isp.clone(), node: n.name.clone(), http_ms: p.http_ms, http_fail: p.http_fail, entry_tcp_ms: p.entry_tcp_ms };
-        if let Ok(line) = serde_json::to_string(&s) {
-            keep.push(line);
+    let mut total = 0;
+    let mut errs = Vec::new();
+    for pf in profiles.iter().filter(|p| p.nodes > 0) {
+        let (nodes, _, _) = match load_nodes(&pf.uid) {
+            Ok(v) => v,
+            Err(e) => {
+                errs.push(format!("{}:{e}", pf.name));
+                continue;
+            }
+        };
+        let entries: Vec<(String, String)> = nodes.iter().map(|n| resolve_entry(&n.server, n.port)).collect();
+        let (core, ports) = match start_core(&nodes) {
+            Ok(v) => v,
+            Err(e) => {
+                errs.push(format!("{}:{e}", pf.name));
+                continue;
+            }
+        };
+        let probes = probe_all(&nodes, &ports, &entries, 5);
+        drop(core);
+        for (n, p) in nodes.iter().zip(probes) {
+            let s = Sample { profile: pf.name.clone(), at: now(), hour, peak, local_isp: local_isp.clone(), node: n.name.clone(), http_ms: p.http_ms, http_fail: p.http_fail, entry_tcp_ms: p.entry_tcp_ms };
+            if let Ok(line) = serde_json::to_string(&s) {
+                keep.push(line);
+            }
         }
+        total += nodes.len();
     }
     write_file(&samples_path(), &(keep.join("\n") + "\n"))?;
-    Ok(nodes.len())
+    if total == 0 {
+        return Err(format!("没有采到任何节点:{}", errs.join(";")));
+    }
+    if !errs.is_empty() {
+        eprintln!("部分订阅采样失败:{}", errs.join(";"));
+    }
+    Ok(total)
 }
 
 /// 命令行入口:`app --verify-report [订阅uid]`,输出 JSON 报告(不含凭据)。
@@ -1229,6 +1268,7 @@ pub fn verify_schedule_set(enable: bool) -> Result<Schedule, String> {
 
 #[derive(Serialize)]
 pub struct PeakStat {
+    profile: String,
     node: String,
     off_n: usize,
     off_ms: Option<f64>,
@@ -1249,13 +1289,13 @@ fn median(v: &mut [f64]) -> Option<f64> {
 
 #[tauri::command]
 pub fn verify_peak_stats() -> Vec<PeakStat> {
-    let mut by: HashMap<String, Vec<Sample>> = HashMap::new();
+    let mut by: HashMap<(String, String), Vec<Sample>> = HashMap::new();
     for s in read_samples() {
-        by.entry(s.node.clone()).or_default().push(s);
+        by.entry((s.profile.clone(), s.node.clone())).or_default().push(s);
     }
     let mut out: Vec<PeakStat> = by
         .into_iter()
-        .map(|(node, ss)| {
+        .map(|((profile, node), ss)| {
             let agg = |peak: bool| {
                 let part: Vec<&Sample> = ss.iter().filter(|s| s.peak == peak).collect();
                 let mut ms: Vec<f64> = part.iter().flat_map(|s| s.http_ms.clone()).collect();
@@ -1267,9 +1307,9 @@ pub fn verify_peak_stats() -> Vec<PeakStat> {
             let (off_n, off_ms, off_loss) = agg(false);
             let (peak_n, peak_ms, peak_loss) = agg(true);
             let local_isp = ss.last().map(|s| s.local_isp.clone()).unwrap_or_default();
-            PeakStat { node, off_n, off_ms, off_loss, peak_n, peak_ms, peak_loss, local_isp }
+            PeakStat { profile, node, off_n, off_ms, off_loss, peak_n, peak_ms, peak_loss, local_isp }
         })
         .collect();
-    out.sort_by(|a, b| a.node.cmp(&b.node));
+    out.sort_by(|a, b| (&a.profile, &a.node).cmp(&(&b.profile, &b.node)));
     out
 }
